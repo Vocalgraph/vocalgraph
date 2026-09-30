@@ -1,0 +1,1262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silence Trimmer Live</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6; --accent-soft: #e6effa; --accent-text: #ffffff;
+    --warn: #9a4b10; --warn-soft: #fbeee3; --row-hover: #f1f0ec; --rec: #d6342a; --lava: #d6342a; --lane: #f2f1ed;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+    --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+    --series-other: #898781; --pending: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --accent: #3987e5; --accent-soft: #1b2a3d; --accent-text: #ffffff;
+      --warn: #f0a868; --warn-soft: #3a2a1c; --row-hover: #232321; --rec: #f0625a; --lava: #f0625a; --lane: #222220;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+      --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-soft: #1b2a3d; --accent-text: #ffffff;
+    --warn: #f0a868; --warn-soft: #3a2a1c; --row-hover: #232321; --rec: #f0625a; --lava: #f0625a; --lane: #222220;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* recordings | page, and in the track layout a summary column as well */
+  .app { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px;
+    max-width: 1260px; margin: 0 auto; padding: 28px 16px 64px; }
+  .app.track { grid-template-columns: 230px minmax(0, 1fr) 280px; max-width: 1600px; gap: 20px; }
+  main { min-width: 0; }
+  #summary { display: none; min-width: 0; }
+  .app.track #summary { display: block; }
+  @media (max-width: 1280px) {
+    .app.track { grid-template-columns: 230px minmax(0, 1fr); }
+    .app.track aside#side { grid-row: 1 / span 2; }
+    .app.track #summary { grid-column: 2; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 14px; align-content: start; }
+  }
+
+  /* Sidebar: the same list as the Recordings pages. */
+  aside#side { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); display: flex; flex-direction: column; min-height: 0; }
+  #sideBody { overflow: auto; min-height: 0; }
+  .side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .side-title { font-size: 15px; margin: 0; }
+  .side-toggle { display: none; }
+  .side-empty, .side-note { color: var(--muted); font-size: 12px; margin: 10px 2px 0; }
+  .lib-list { display: grid; gap: 4px; }
+  .lib { display: flex; border-radius: 8px; border: 1px solid transparent; }
+  .lib:hover { background: var(--row-hover); }
+  .lib.fresh { background: var(--accent-soft); border-color: var(--accent); }
+  .lib .what { flex: 1; min-width: 0; text-align: left; font: inherit; color: inherit; background: none; border: none;
+    padding: 8px 10px; cursor: pointer; border-radius: 8px; text-decoration: none; }
+  .lib .nm { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib .meta { display: block; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .lib .meta.bad { color: var(--warn); }
+  @media (max-width: 900px) {
+    .app, .app.track { grid-template-columns: 1fr; gap: 14px; padding-top: 16px; }
+    .app.track aside#side, .app.track #summary { grid-column: 1; grid-row: auto; }
+    aside#side { position: static; max-height: none; background: var(--surface-1); border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px; }
+    .side-title { display: none; }
+    .side-toggle { display: inline-flex; gap: 6px; align-items: center; font: inherit; font-weight: 600; background: none;
+      border: none; color: var(--text-primary); cursor: pointer; padding: 4px 0; }
+    .side-toggle::after { content: "▾"; color: var(--muted); }
+    .side-toggle[aria-expanded="true"]::after { content: "▴"; }
+    .side-head { margin-bottom: 0; }
+    aside#side:not(.open) #sideBody { display: none; }
+    aside#side.open #sideBody { margin-top: 10px; max-height: 50vh; }
+  }
+
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .lede { color: var(--text-secondary); margin: 0 0 20px; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 14px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; margin-bottom: 16px; }
+  .form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 16px; align-items: start; margin: 14px 0 18px; }
+  .form > label { color: var(--text-secondary); font-size: 14px; padding-top: 5px; }
+  @media (max-width: 560px) { .form { grid-template-columns: 1fr; gap: 4px; } .form > label { padding-top: 8px; } }
+  .sources { display: grid; gap: 6px; min-width: 0; }
+  .source { display: flex; gap: 6px; align-items: center; min-width: 0; }
+  .source select { flex: 1; min-width: 0; width: 100%; text-overflow: ellipsis; }
+  .form select { min-width: 0; width: 100%; }
+  .linkbtn { font: inherit; font-size: 13px; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 0; justify-self: start; }
+  .x { font: inherit; background: none; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); cursor: pointer; width: 30px; height: 30px; }
+  .x:hover { color: var(--warn); }
+  .hint { color: var(--muted); font-size: 12px; margin: 0; }
+  select, input[type=text] { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; max-width: 100%; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .btn { display: inline-block; font: inherit; font-size: 14px; font-weight: 600; text-decoration: none;
+    cursor: pointer; border-radius: 8px; padding: 8px 14px; border: 1px solid var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.secondary { background: transparent; color: var(--accent); }
+  .btn.stop { background: var(--rec); border-color: var(--rec); color: #fff; }
+  .btn.quiet { background: transparent; border-color: var(--border); color: var(--text-secondary); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .error { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 12px; margin: 0 0 14px; }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin-bottom: 14px; }
+  .rec { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 20px; }
+  .rec::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--rec); }
+  .rec.live::before { animation: pulse 1.2s ease-in-out infinite; }
+  .rec.done::before { background: var(--muted); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .facts { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .meter { width: 160px; height: 8px; background: var(--grid); border-radius: 99px; overflow: hidden; }
+  .meter > div { height: 100%; width: 0; background: var(--series-3); transition: width .1s; }
+  .bar { height: 8px; background: var(--grid); border-radius: 99px; overflow: hidden; margin: 8px 0 12px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 14px 0 0; font-size: 14px;
+    padding-top: 12px; border-top: 1px solid var(--grid); }
+  .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13px; }
+  .seg button { font: inherit; background: none; border: none; padding: 4px 12px; color: var(--text-secondary); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text-primary); font-weight: 600; }
+  #timeline svg, #tracks svg { display: block; width: 100%; user-select: none; }
+  .toolbar input[type=number] { width: 72px; font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px; }
+  /* Close-up: the last few seconds, redrawn every frame so it glides. */
+  .close-tools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  #close { position: relative; margin-top: 10px; cursor: crosshair; }
+  #close canvas { display: block; width: 100%; }
+  #tracks { position: relative; cursor: crosshair; }
+  .spk-list { display: grid; gap: 8px; margin-top: 12px; }
+  .spk { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto; gap: 6px 12px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .spk .chip, .tspk .chip { width: 12px; height: 12px; border-radius: 3px; }
+  .spk input { width: 100%; font-weight: 600; }
+  .empty { color: var(--muted); font-size: 14px; margin: 8px 0; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-secondary); font-size: 12px; margin-top: 8px; }
+  .legend-row span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-row i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  /* Summary column (track layout). */
+  #summary .card { padding: 16px; margin-bottom: 14px; }
+  #summary h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .tspk { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 4px 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--grid); }
+  .tspk:first-child { border-top: none; }
+  .tspk input[type=text] { width: 100%; font-weight: 600; font-size: 13px; }
+  .tspk .share { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .showv { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .tile .k { color: var(--muted); font-size: 11px; }
+  .tile .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .voice-head { display: flex; align-items: center; gap: 6px; font-weight: 600; margin: 12px 0 6px; font-size: 14px; }
+  .voice-head:first-child { margin-top: 0; }
+  .voice-head .chip { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* Voice charts: the same classes voice.js builds in the other layouts. */
+  .vmeta { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 14px; }
+  .vmeta .stat { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; min-width: 110px; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .stat .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .vcard { border-top: 1px solid var(--grid); padding: 12px 0 4px; }
+  .vcard .desc { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+  .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
+  .plot { position: relative; }
+  .plot svg { display: block; width: 100%; touch-action: none; user-select: none; }
+  .tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 150px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.14); font-size: 12px; }
+  .tooltip .t { color: var(--muted); margin-bottom: 4px; }
+  .tooltip .row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+  .tooltip .row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .tooltip .row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tooltip .row span { color: var(--text-secondary); }
+  .tooltip .name, .tooltip .who { font-weight: 600; }
+  .tooltip.tt .row { justify-content: space-between; gap: 12px; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+<aside id="side" aria-label="Your recordings">
+  <div class="side-head">
+    <button class="side-toggle" id="sideToggle" aria-expanded="false" aria-controls="sideBody">Your recordings <span id="libCount"></span></button>
+    <h2 class="side-title">Your recordings</h2>
+  </div>
+  <div id="sideBody">
+    <div class="lib-list" id="libList"></div>
+    <p class="side-empty" id="libEmpty" hidden>Nothing yet. Sessions you save show up here.</p>
+    <p class="side-note">Click one to open it in Recordings.</p>
+  </div>
+</aside>
+
+<main>
+  <div class="top">
+    <h1>Silence Trimmer</h1>
+    <div id="nav"></div>
+  </div>
+  <p class="lede">Records from a microphone and shows who is speaking and how each voice sounds, as it happens.
+    When you stop, the full recording is saved to your library and trimmed like any other.</p>
+
+  <p class="error" id="err" hidden></p>
+
+  <!-- 1. Choose the inputs -->
+  <section class="card" id="setup" hidden>
+    <h2>Start a live session</h2>
+    <div class="form">
+      <label>Listen to</label>
+      <div class="sources">
+        <div id="sources" class="sources"></div>
+        <span class="actions" style="gap:14px">
+          <button class="linkbtn" id="addSource" type="button">+ Add another input</button>
+          <button class="linkbtn" id="refreshSources" type="button" title="Look again for microphones and for programs making sound">↻ Refresh the list</button>
+        </span>
+        <p class="hint" id="sourcesHint">Add a second microphone, or one program's sound (a call, a video, a game): only
+          that program is recorded, not the rest of the computer, and you still hear it as normal. Programs appear once
+          they have made a sound; click Refresh if one is missing. Inputs are mixed for the analysis, and each is also
+          kept as its own track in the saved file.</p>
+      </div>
+      <label for="format">Save the full recording as</label>
+      <select id="format">
+        <option value="m4a">M4A (smaller, plays everywhere)</option>
+        <option value="flac">FLAC (lossless, larger)</option>
+      </select>
+      <label for="count0">Number of speakers</label>
+      <select id="count0"></select>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="start">Start recording</button>
+    </div>
+    <p class="note">Pitch, resonance, loudness and breathiness show within about a quarter of a second. Who is speaking
+      follows a moment later (after the first 10 seconds), and colours the measures in. "Replay" plays a saved recording
+      at its normal speed, as if it were live, which is handy for trying this out.</p>
+  </section>
+
+  <!-- 2. The session -->
+  <section class="card" id="session" hidden>
+    <div class="status">
+      <span class="rec" id="clock">0:00</span>
+      <span class="meter" id="meter" title="Input level"><div></div></span>
+      <span class="facts" id="facts"></span>
+    </div>
+    <div class="actions" id="liveActions">
+      <button class="btn stop" id="stop">Stop and save</button>
+      <button class="btn quiet" id="discard">Discard</button>
+    </div>
+    <div id="saved" hidden>
+      <p class="sub" id="savedText"></p>
+      <div class="bar" id="savedBar"><div></div></div>
+      <div class="actions" id="savedActions"></div>
+    </div>
+    <div class="toolbar">
+      <label>Below the close-up, show
+        <span class="seg" role="group" aria-label="Time shown below the close-up">
+          <button data-span="m1" aria-pressed="false">1 min</button><button data-span="recent" aria-pressed="true">2 min</button><button data-span="m5" aria-pressed="false">5 min</button><button data-span="all" aria-pressed="false">Whole session</button>
+        </span></label>
+      <label>Number of speakers <select id="count"></select></label>
+      <span id="guideSlot"></span>
+    </div>
+    <div class="toolbar" style="border-top: none; padding-top: 0">
+      <label>Scale <select id="scale">
+        <option value="fit">Fit what's on screen</option>
+        <option value="session">Steady: whole session so far</option>
+        <option value="fixed">Steady: pitch range I set</option>
+      </select></label>
+      <span id="fixedRange" hidden><label>Pitch from <input type="number" id="fixLo" min="20" max="1000" step="10"> to
+        <input type="number" id="fixHi" min="30" max="2000" step="10"> Hz</label></span>
+      <span class="hint" id="scaleHint"></span>
+    </div>
+  </section>
+
+  <!-- Both layouts: the last few seconds, close up -->
+  <section class="card" id="closeCard" hidden>
+    <div class="top">
+      <h2>Close-up</h2>
+      <div class="close-tools">
+        <label class="facts">Show <select id="closeWhat">
+          <option value="pitch">Pitch</option><option value="res">Resonance</option>
+          <option value="loud">Loudness</option><option value="hnr">Breathiness</option>
+        </select></label>
+        <span class="seg" role="group" aria-label="Close-up length">
+          <button data-close="5">5 s</button><button data-close="10">10 s</button><button data-close="20">20 s</button><button data-close="30">30 s</button>
+        </span>
+      </div>
+    </div>
+    <div id="close" role="img" aria-label="The last few seconds: who is speaking, and the chosen measure, by speaker."><canvas id="closeCanvas"></canvas></div>
+    <div class="legend-row" id="closeLegend"></div>
+  </section>
+
+  <!-- Card layout -->
+  <section class="card" id="whoCard" hidden>
+    <h2>Who's speaking</h2>
+    <div id="timeline"></div>
+    <p class="note">Paler stretches are the newest speech, matched to the nearest voice. The full grouping re-runs every
+      few seconds and can relabel them. A new voice shows in grey, as "Not sure yet", until the grouping has kept it
+      apart from everyone else twice. Someone on an input of their own (a call app, their own microphone) is read off
+      that input, so when two people talk at once both are marked. Type over a name to rename someone.</p>
+    <div class="spk-list" id="spkList"></div>
+  </section>
+
+  <section class="card" id="voiceCard" hidden>
+    <div class="top">
+      <h2>Voice</h2>
+      <label class="facts">Show <select id="voiceWho"></select></label>
+    </div>
+    <p class="empty" id="voiceEmpty" hidden>Waiting for speech.</p>
+    <div class="vmeta" id="voiceMeta"></div>
+    <div id="voiceCharts"></div>
+  </section>
+
+  <!-- Track layout -->
+  <section class="card" id="trackCard" hidden>
+    <div id="tracks" role="img" aria-label="Speakers, pitch, resonance, loudness and breathiness on one live timeline."></div>
+    <div class="legend-row" id="trackLegend"></div>
+  </section>
+</main>
+
+<aside id="summary" aria-label="Summary">
+  <section class="card">
+    <h2>Speakers</h2>
+    <div id="tspkList"></div>
+    <p class="note">Tick <b>Show voice</b> to chart a speaker; tick two to compare. Speech not put to anyone yet (the
+      newest words, or a voice not yet confirmed as a new speaker) is drawn in grey.</p>
+  </section>
+  <section class="card">
+    <h2>Voice</h2>
+    <div id="tvoice"></div>
+  </section>
+</aside>
+</div>
+<div class="tooltip" id="tooltip" hidden></div>
+<script src="/static/voice.js"></script>
+<script src="/static/nav.js"></script>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const NS = 'http://www.w3.org/2000/svg';
+const svgAdd = (parent, tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); parent.append(e); return e; };
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
+const SPANS = { m1: 60, recent: 120, m5: 300 };     // seconds shown below the close-up
+const TL = { l: 120, r: 24, lane: 26 };            // same margins as the voice charts
+const SPK_COLORS = 8;
+const KEYS = ['f0', 'f1', 'f2', 'f3', 'loudness', 'hnr'];
+const PENDING = -2, NOBODY = -1;                   // frame labels besides speaker ids
+let S = null;                                      // latest /api/live/state
+let layout = Nav.layout();
+let span = ['m1', 'recent', 'm5', 'all'].includes(store.get('live.span')) ? store.get('live.span') : 'recent';
+let closeSpan = [5, 10, 20, 30].includes(+store.get('live.close')) ? +store.get('live.close') : 10;
+let closeWhat = ['pitch', 'res', 'loud', 'hnr'].includes(store.get('live.closeWhat')) ? store.get('live.closeWhat') : 'pitch';
+let scaleMode = ['fit', 'session', 'fixed'].includes(store.get('live.scale')) ? store.get('live.scale') : 'fit';
+let fixLo = +store.get('live.fixLo') || 60, fixHi = +store.get('live.fixHi') || 400;
+let voiceWho = 'all', sessionId = null, freshJob = null;
+let shownT = [], shownTouched = false;             // speakers charted in the track layout
+
+function fmtClock(s) { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}` : `${m}:${String(r).padStart(2, '0')}`; }
+const tenths = (s) => { const m = Math.floor(s / 60), r = s - m * 60; return `${m}:${r.toFixed(1).padStart(4, '0')}`; };
+function showError(msg) { $('err').textContent = msg || ''; $('err').hidden = !msg; }
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `The app said ${res.status}.`);
+  return data;
+}
+function countOptions(sel) {
+  sel.replaceChildren(new Option('Let the app decide', ''));
+  for (let i = 1; i <= 8; i++) sel.append(new Option(String(i), String(i)));
+}
+countOptions($('count0')); countOptions($('count'));
+const running = () => S && ['starting', 'live', 'stopping', 'finishing'].includes(S.status);
+
+// ---- top bar, layout, recordings list --------------------------------------------------
+
+Nav.mount($('nav'), { mode: 'live', onLayout: (l) => { layout = l; applyLayout(); } });
+Nav.guideControl($('guideSlot'));
+VoiceCharts.setGuide(Nav.guide());
+Nav.onGuide((g) => { VoiceCharts.setGuide(g); statsAt = 0; drawSoon(); });
+
+function applyLayout() {
+  const track = layout === 'track', idle = !S || S.status === 'idle';
+  $('app').classList.toggle('track', track && !idle);
+  $('whoCard').hidden = $('voiceCard').hidden = idle || track;
+  $('closeCard').hidden = idle;
+  $('trackCard').hidden = idle || !track;
+  $('summary').hidden = idle || !track;
+  vcShown = false;                      // the charts' host may have been hidden: rebuild on next draw
+  statsAt = 0;
+  drawSoon();
+}
+
+async function loadLibrary() {
+  let items = [];
+  try { items = await (await fetch('/api/library')).json(); } catch { return; }
+  const list = $('libList'); list.replaceChildren();
+  for (const it of items) {
+    const row = el('div', 'lib' + (it.id === freshJob ? ' fresh' : ''));
+    const a = el('a', 'what'); a.href = Nav.recordingsHref(it.id);
+    a.addEventListener('click', () => { a.href = Nav.recordingsHref(it.id); Nav.rememberJob(it.id); });
+    const nm = el('span', 'nm', it.name); nm.title = it.name;
+    const when = it.created ? new Date(it.created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    const meta = el('span', 'meta');
+    if (it.status === 'done') meta.textContent = `${fmtClock(it.duration)} → ${fmtClock(it.trimmed)} · ${it.speakers === 1 ? '1 speaker' : `${it.speakers} speakers`} · ${when}`;
+    else if (it.status === 'working') meta.textContent = `Processing… · ${when}`;
+    else { meta.textContent = `Didn't finish · ${when}`; meta.classList.add('bad'); }
+    a.append(nm, meta); row.append(a); list.append(row);
+  }
+  $('libEmpty').hidden = items.length > 0;
+  $('libCount').textContent = items.length ? `(${items.length})` : '';
+}
+setInterval(loadLibrary, 10000);
+loadLibrary();
+$('sideToggle').addEventListener('click', () => {
+  const open = $('side').classList.toggle('open');
+  $('sideToggle').setAttribute('aria-expanded', String(open));
+});
+
+// ---- setup: one or more inputs ------------------------------------------------------------
+
+let DEVICES = [], LIBRARY_DONE = [];
+async function loadSources() {
+  [DEVICES, LIBRARY_DONE] = await Promise.all([
+    api('/api/live/devices').catch(() => []),
+    api('/api/library').then(l => l.filter(j => j.status === 'done')).catch(() => [])]);
+  let saved = [];
+  try { saved = JSON.parse(store.get('live.sources') || '[]'); } catch {}
+  $('sources').replaceChildren();
+  (saved.length ? saved : ['']).forEach((v, i) => addSourceRow(v, i === 0));
+  const fmt = store.get('live.format'); if (fmt) $('format').value = fmt;
+  syncSources();
+}
+function addSourceRow(value, first) {
+  const row = el('div', 'source');
+  const sel = el('select'); sel.setAttribute('aria-label', first ? 'Input' : 'Another input');
+  const mics = el('optgroup'); mics.label = 'Microphones and other inputs';
+  const apps = el('optgroup'); apps.label = "A program's sound";
+  for (const d of DEVICES) {
+    const app = d.kind === 'app';
+    const o = new Option(app ? `${d.name}${d.playing ? '  (making sound now)' : ''}` : d.name, d.id ? 'dev:' + d.id : '');
+    o.dataset.name = d.name;
+    if (d.disabled) { o.disabled = true; o.title = d.name; }     // e.g. the Mac's permission, explained
+    (app ? apps : mics).append(o);
+  }
+  if (!mics.children.length) { const o = new Option('No microphone found', ''); o.disabled = true; mics.append(o); }
+  sel.append(mics);
+  if (apps.children.length) sel.append(apps);
+  if (first && LIBRARY_DONE.length) {       // a replay is the only input, so only offered first
+    const rep = el('optgroup'); rep.label = 'Replay a saved recording';
+    for (const j of LIBRARY_DONE) rep.append(new Option(j.name, 'lib:' + j.id));
+    sel.append(rep);
+  }
+  if (value && [...sel.options].some(o => o.value === value)) sel.value = value;
+  else if (!first) {                         // a new row: the first input not already chosen
+    const taken = new Set(sourceValues());
+    const free = [...sel.options].find(o => o.value.startsWith('dev:') && !taken.has(o.value) && !o.disabled);
+    if (free) sel.value = free.value;
+  }
+  sel.addEventListener('change', syncSources);
+  row.append(sel);
+  if (!first) {
+    const x = el('button', 'x', '×'); x.type = 'button'; x.title = 'Remove this input'; x.setAttribute('aria-label', 'Remove this input');
+    x.addEventListener('click', () => { row.remove(); syncSources(); });
+    row.append(x);
+  }
+  $('sources').append(row);
+}
+const sourceValues = () => [...document.querySelectorAll('#sources select')].map(s => s.value);
+function syncSources() {
+  const vals = sourceValues(), replay = vals[0]?.startsWith('lib:');
+  // Replaying a recording can't be mixed with other inputs.
+  document.querySelectorAll('#sources .source').forEach((r, i) => { if (i > 0) r.hidden = replay; });
+  $('addSource').hidden = replay || vals.length >= Math.min(8, DEVICES.length);
+  $('sourcesHint').hidden = replay;
+}
+$('addSource').addEventListener('click', () => { addSourceRow('', false); syncSources(); });
+// Look for inputs again, keeping what is chosen.
+$('refreshSources').addEventListener('click', async () => {
+  store.set('live.sources', JSON.stringify(sourceValues().filter(Boolean)));
+  await loadSources();
+});
+
+$('start').addEventListener('click', async () => {
+  const sels = [...document.querySelectorAll('#sources .source:not([hidden]) select')];
+  const vals = sels.map(s => s.value).filter(Boolean);
+  if (!vals.length) { showError('Choose a microphone first.'); return; }
+  store.set('live.sources', JSON.stringify(vals)); store.set('live.format', $('format').value);
+  const body = { format: $('format').value, num_speakers: $('count0').value || null };
+  if (vals[0].startsWith('lib:')) body.replay = vals[0].slice(4);
+  else {
+    const seen = new Set();
+    body.devices = sels.filter(s => s.value.startsWith('dev:') && !seen.has(s.value) && seen.add(s.value))
+      .map(s => ({ id: s.value.slice(4), name: s.selectedOptions[0].dataset.name }));
+  }
+  $('start').disabled = true; showError('');
+  try { await api('/api/live/start', body); await poll(); }
+  catch (e) { showError(e.message); }
+  finally { $('start').disabled = false; }
+});
+$('stop').addEventListener('click', async () => {
+  $('stop').disabled = true;
+  try { await api('/api/live/stop', {}); } catch (e) { showError(e.message); }
+});
+$('discard').addEventListener('click', async () => {
+  if (!confirm('Throw this recording away? It will not be saved.')) return;
+  try { await api('/api/live/discard', {}); S = null; render(); await poll(); } catch (e) { showError(e.message); }
+});
+$('count').addEventListener('change', () => api('/api/live/settings', { num_speakers: $('count').value || null }).catch(e => showError(e.message)));
+for (const b of document.querySelectorAll('.seg [data-span]'))
+  b.addEventListener('click', () => { span = b.dataset.span; store.set('live.span', span); syncSpan(); statsAt = 0; drawSoon(); });
+function syncSpan() {
+  for (const b of document.querySelectorAll('.seg [data-span]')) b.setAttribute('aria-pressed', String(b.dataset.span === span));
+  for (const b of document.querySelectorAll('.seg [data-close]')) b.setAttribute('aria-pressed', String(+b.dataset.close === closeSpan));
+}
+syncSpan();
+for (const b of document.querySelectorAll('.seg [data-close]'))
+  b.addEventListener('click', () => { closeSpan = +b.dataset.close; store.set('live.close', closeSpan); syncSpan(); drawSoon(); });
+$('closeWhat').value = closeWhat;
+$('closeWhat').addEventListener('change', () => { closeWhat = $('closeWhat').value; store.set('live.closeWhat', closeWhat); drawSoon(); });
+// The value scale: fit what's on screen (moves as it scrolls), or steady.
+function syncScale() {
+  $('scale').value = scaleMode; $('fixedRange').hidden = scaleMode !== 'fixed';
+  $('fixLo').value = fixLo; $('fixHi').value = fixHi;
+  $('scaleHint').textContent = scaleMode === 'fit' ? '' : scaleMode === 'session'
+    ? 'Each chart keeps the range of the whole session so far, so it only widens when a voice goes further.'
+    : 'Pitch stays in this range; the other measures keep the range of the whole session so far.';
+}
+syncScale();
+$('scale').addEventListener('change', () => { scaleMode = $('scale').value; store.set('live.scale', scaleMode); syncScale(); rangesAt = 0; vcShown = false; drawSoon(); });
+for (const id of ['fixLo', 'fixHi']) $(id).addEventListener('change', () => {
+  const lo = +$('fixLo').value, hi = +$('fixHi').value;
+  if (lo > 0 && hi > lo) { fixLo = lo; fixHi = hi; store.set('live.fixLo', lo); store.set('live.fixHi', hi); drawSoon(); }
+  syncScale();
+});
+$('voiceWho').addEventListener('change', () => { voiceWho = $('voiceWho').value; vcShown = false; statsAt = 0; drawSoon(); });
+
+// ---- state and voice frames -------------------------------------------------------------------
+
+async function poll() {
+  try {
+    const s = await api('/api/live/state');
+    if (s.id && s.id !== sessionId) { sessionId = s.id; resetFrames(); shownT = []; shownTouched = false; clock.at = null; }
+    const wasRunning = running();
+    S = s;
+    tick(S.duration);
+    if (wasRunning && !running()) loadLibrary();
+    if (S.job && S.job.status === 'done' && freshJob !== S.job.id) { freshJob = S.job.id; loadLibrary(); }
+    render();
+  } catch (e) { showError('Lost contact with the app. Is its window still open?'); }
+}
+
+// The session clock, running smoothly between polls: the server's duration
+// arrives twice a second, and the views scroll by this instead, so they glide
+// rather than jump. Corrections are eased in; a big one (a stall) is taken at once.
+const clock = { base: 0, at: null, last: 0 };
+function tick(duration) {
+  const now = performance.now();
+  if (clock.at == null || !running()) { clock.base = duration; clock.at = now; clock.last = duration; return; }
+  const guess = clock.base + (now - clock.at) / 1000, err = duration - guess;
+  clock.base = Math.abs(err) > 1 ? duration : guess + err * 0.25; clock.at = now;
+}
+function nowT() {
+  if (!S) return 0;
+  if (!running() || clock.at == null) return S.duration;
+  const t = Math.min(clock.base + (performance.now() - clock.at) / 1000, S.duration + 0.6);
+  clock.last = Math.max(clock.last, t);                 // never backwards
+  return clock.last;
+}
+
+// Every voice frame so far, kept here: the server measures each one once, and
+// whose it is gets looked up in the latest turns whenever it is drawn. With
+// several inputs each is measured on its own: src says which input a frame is
+// from, prim whether that input was the loudest at that moment.
+let F = null;
+function resetFrames() { F = { n: 0, total: null, t: new Float64Array(0), src: new Int8Array(0), prim: new Uint8Array(0),
+  v: Object.fromEntries(KEYS.map(k => [k, new Float32Array(0)])) }; }
+resetFrames();
+function addFrames(d) {
+  const m = d.t.length; if (!m) return;
+  if (F.n + m > F.t.length) {
+    const cap = Math.max(F.t.length * 2, F.n + m, 6000);
+    const t = new Float64Array(cap); t.set(F.t.subarray(0, F.n)); F.t = t;
+    const src = new Int8Array(cap); src.set(F.src.subarray(0, F.n)); F.src = src;
+    const prim = new Uint8Array(cap); prim.set(F.prim.subarray(0, F.n)); F.prim = prim;
+    for (const k of KEYS) { const a = new Float32Array(cap); a.set(F.v[k].subarray(0, F.n)); F.v[k] = a; }
+  }
+  for (let i = 0; i < m; i++) {
+    F.t[F.n + i] = d.t[i];
+    F.src[F.n + i] = d.src ? d.src[i] : 0;
+    F.prim[F.n + i] = d.prim ? d.prim[i] : 1;
+    for (const k of KEYS) F.v[k][F.n + i] = d[k][i] == null ? NaN : d[k][i];
+  }
+  F.n += m;
+}
+let framesBusy = false;
+async function pullFrames() {
+  if (framesBusy || !S || S.status === 'idle') return;
+  if (!running() && F.total != null && F.n >= F.total) return;      // finished and all here
+  framesBusy = true;
+  try {
+    for (let guard = 0; guard < 30; guard++) {             // catch up in pieces after opening mid-session
+      const d = await api(`/api/live/frames?from=${F.n}`);
+      if (d.from !== F.n) { resetFrames(); continue; }
+      addFrames(d); F.total = d.total;
+      if (d.next >= d.total) break;
+    }
+    drawSoon();
+  } catch { /* the next pull retries */ }
+  finally { framesBusy = false; }
+}
+
+// First frame at or after time t.
+function lower(t) { let lo = 0, hi = F.n; while (lo < hi) { const m = (lo + hi) >> 1; if (F.t[m] < t) lo = m + 1; else hi = m; } return lo; }
+
+// Whose each frame in [i0, i1) is: a speaker id, NOBODY (not speech), or
+// PENDING (not put to anyone yet: newer than speaker detection has reached,
+// or a voice not yet confirmed as a speaker of its own). Someone on an input
+// of their own gets that input's frames; anyone else the loudest input's.
+function labels(i0, i1) {
+  const lab = new Int32Array(Math.max(0, i1 - i0)).fill(NOBODY);
+  if (!S || i1 <= i0) return lab;
+  const home = new Map((S.speakers || []).filter(s => s.input != null).map(s => [s.id, s.input]));
+  for (const [a, b, k] of S.turns || []) {
+    const j0 = Math.max(i0, lower(a)), j1 = Math.min(i1, lower(b)), h = home.get(k);
+    for (let j = j0; j < j1; j++)
+      if (lab[j - i0] === NOBODY && (h == null ? F.prim[j] : F.src[j] === h)) lab[j - i0] = k;
+  }
+  for (const [a, b] of S.unsure || []) {
+    const j0 = Math.max(i0, lower(a)), j1 = Math.min(i1, lower(b));
+    for (let j = j0; j < j1; j++) if (lab[j - i0] === NOBODY && F.prim[j]) lab[j - i0] = PENDING;
+  }
+  const known = running() ? S.duration - (S.speakers_behind || 0) : Infinity;
+  for (let j = Math.max(i0, lower(known)); j < i1; j++) if (lab[j - i0] === NOBODY && F.prim[j]) lab[j - i0] = PENDING;
+  return lab;
+}
+
+// ---- rendering --------------------------------------------------------------------------------
+
+// The part below the close-up: its right edge is the smooth clock, so it
+// glides as the session goes on.
+function view() {
+  const end = Math.max(nowT(), 1);
+  if (span === 'all') return [0, end];
+  const w = SPANS[span];
+  return [Math.max(0, end - w), Math.max(end, w)];
+}
+// Speakers are numbered by the server, in the order they were confirmed.
+const num = (k) => { const s = (S.speakers || []).find(x => x.id === k); return s ? s.n - 1 : 0; };
+const spkColor = (k) => k === PENDING ? 'var(--pending)' : num(k) < SPK_COLORS ? `var(--series-${num(k) + 1})` : 'var(--series-other)';
+const spkName = (k) => k === PENDING ? 'Not sure yet' : (S.names && S.names[k]) || `Speaker ${num(k) + 1}`;
+const speakers = () => (S.speakers || []).slice().sort((a, b) => a.n - b.n);
+
+// Steady scales: each measure's range over the whole session so far (the
+// middle 99%, so one wild frame doesn't stretch it), refreshed now and then.
+const RANGE_KEYS = { pitch: ['f0'], res: ['f1', 'f2', 'f3'], loud: ['loudness'], hnr: ['hnr'] };
+let ranges = {}, rangesAt = 0;
+function refreshRanges() {
+  const out = {}, step = Math.max(1, Math.ceil(F.n / 30000));
+  for (const [name, keys] of Object.entries(RANGE_KEYS)) {
+    const vals = [];
+    for (const k of keys) for (let i = 0; i < F.n; i += step) { const v = F.v[k][i]; if (v === v) vals.push(v); }
+    if (vals.length < 20) continue;
+    vals.sort((a, b) => a - b);
+    out[name] = [vals[Math.floor(vals.length * 0.005)], vals[Math.floor(vals.length * 0.995)]];
+  }
+  ranges = out;
+}
+// A chart's value range: what's on screen, or steady.
+function scaled(name, lo, hi) {
+  if (scaleMode === 'fixed' && name === 'pitch') return [fixLo, fixHi];
+  if (scaleMode !== 'fit' && ranges[name]) {
+    const [a, b] = ranges[name];
+    return isFinite(lo) ? [Math.min(a, lo), Math.max(b, hi)] : [a, b];
+  }
+  return [lo, hi];
+}
+
+let restoreDone = false;
+function render() {
+  const idle = !S || S.status === 'idle';
+  $('setup').hidden = !idle;
+  $('session').hidden = idle;
+  applyLayoutQuiet(idle);
+  if (idle) { VoiceCharts.clear(); vcShown = false; if (!$('sources').children.length) loadSources(); if (!restoreDone) { restoreDone = true; Nav.restoreScroll(); } return; }
+  if (S.status === 'error') showError(S.error || 'Something went wrong.');
+
+  const clk = $('clock');
+  clk.textContent = fmtClock(S.duration);
+  clk.className = 'rec ' + (S.status === 'live' ? 'live' : running() ? '' : 'done');
+  const lvl = S.level == null ? 0 : Math.max(0, Math.min(1, (S.level + 60) / 60));
+  $('meter').firstElementChild.style.width = (lvl * 100) + '%';
+  $('meter').hidden = S.status !== 'live';
+  const facts = [];
+  if (S.status === 'starting') facts.push('Starting…');
+  if (S.status === 'live') {
+    facts.push(S.label);
+    if (S.speakers_behind > 5) facts.push(`speakers ${Math.round(S.speakers_behind)} s behind`);
+  }
+  if (S.status === 'stopping' || S.status === 'finishing') facts.push('Finishing the last few seconds…');
+  if (S.warnings && S.warnings.length) facts.push(...S.warnings);
+  $('facts').textContent = facts.join(' · ');
+  $('liveActions').hidden = !running();
+  $('stop').disabled = S.status !== 'live' && S.status !== 'starting';
+  if (document.activeElement !== $('count')) $('count').value = S.num_speakers ?? '';
+
+  const ids = speakers().map(s => s.id);
+  shownT = shownT.filter(i => ids.includes(i));
+  if (!shownTouched && !shownT.length && ids.length) shownT = [ids[0]];   // one speaker by default
+
+  renderSaved();
+  renderSpeakers();
+  pullFrames();
+  drawSoon();
+  if (!restoreDone) { restoreDone = true; Nav.restoreScroll(); }
+}
+let lastIdle = null;
+function applyLayoutQuiet(idle) { if (idle !== lastIdle) { lastIdle = idle; applyLayout(); } }
+
+function renderSaved() {
+  const box = $('saved'), j = S.job;
+  box.hidden = running() || S.status === 'error';
+  if (box.hidden) return;
+  const acts = $('savedActions'); acts.replaceChildren();
+  const link = (text, href, cls) => { const a = el('a', 'btn ' + cls, text); a.href = href; acts.append(a); return a; };
+  const fmt = (S.format || 'm4a').toUpperCase();
+  if (!j) {
+    $('savedText').textContent = 'Saving the recording…'; $('savedBar').hidden = true;
+  } else if (j.status === 'working') {
+    $('savedText').textContent = `Saved to your library. Trimming it now: ${(j.stage || 'working').toLowerCase()}.`;
+    $('savedBar').hidden = false; $('savedBar').firstElementChild.style.width = ((j.frac ?? 0) * 100) + '%';
+    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+  } else if (j.status === 'done') {
+    $('savedText').textContent = 'Saved to your library and trimmed.'; $('savedBar').hidden = true;
+    link('Download trimmed MP3', `/api/jobs/${j.id}/audio?download=1`, 'primary');
+    link('Download trimmed M4A', `/api/jobs/${j.id}/audio.m4a`, 'secondary');
+    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+    const open = link('Open in Recordings', Nav.recordingsHref(j.id), 'secondary');
+    open.addEventListener('click', () => { open.href = Nav.recordingsHref(j.id); Nav.rememberJob(j.id); });
+  } else {
+    $('savedText').textContent = 'The recording was saved, but trimming it failed: ' + (j.error || 'unknown error');
+    $('savedBar').hidden = true;
+    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+  }
+  const again = el('button', 'btn quiet', 'New live session');
+  again.addEventListener('click', async () => { await api('/api/live/new', {}).catch(e => showError(e.message)); S = null; render(); poll(); });
+  acts.append(again);
+}
+
+function nameInput(s) {
+  const input = el('input'); input.type = 'text'; input.value = spkName(s.id); input.setAttribute('aria-label', 'Speaker name');
+  input.dataset.id = s.id;
+  input.addEventListener('change', () => {
+    const v = input.value.trim(); S.names[s.id] = v;
+    api('/api/live/names', { [s.id]: v }).catch(e => showError(e.message));
+    drawSoon();
+  });
+  return input;
+}
+function renderSpeakers() {
+  const ids = speakers().map(s => `${s.id}:${s.n}`).join(',');
+  // Rebuilt only when the set of speakers (or their numbers) changes, so typing a name isn't interrupted.
+  const list = $('spkList'), tlist = $('tspkList');
+  if (list.dataset.ids !== ids) {
+    list.dataset.ids = tlist.dataset.ids = ids;
+    list.replaceChildren(); tlist.replaceChildren();
+    for (const s of speakers()) {
+      const row = el('div', 'spk'); row.dataset.id = s.id;
+      const chip = el('span', 'chip'); chip.style.background = spkColor(s.id);
+      if (s.track) row.title = `On their own input: ${s.track}`;
+      row.append(chip, nameInput(s), el('span', 'facts'));
+      list.append(row);
+      const trow = el('div', 'tspk'); trow.dataset.id = s.id;
+      const tchip = el('span', 'chip'); tchip.style.background = spkColor(s.id);
+      const share = el('div', 'share');
+      const lab = el('label', 'showv'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = shownT.includes(s.id);
+      cb.addEventListener('change', () => {
+        shownTouched = true;
+        shownT = cb.checked ? [...shownT, s.id] : shownT.filter(i => i !== s.id);
+        statsAt = 0; drawSoon();
+      });
+      lab.append(cb, document.createTextNode('Show voice'));
+      share.append(lab, el('span', 'talk'));
+      trow.append(tchip, nameInput(s), share);
+      tlist.append(trow);
+    }
+  }
+  for (const s of speakers()) {
+    const row = list.querySelector(`.spk[data-id="${s.id}"]`);
+    if (row) row.querySelector('.facts').textContent = fmtClock(s.talk) + ' talking' + (s.track ? ` · ${s.track}` : '');
+    const trow = tlist.querySelector(`.tspk[data-id="${s.id}"]`);
+    if (trow) { trow.querySelector('.talk').textContent = fmtClock(s.talk) + ' talking'; trow.querySelector('input[type=checkbox]').checked = shownT.includes(s.id); }
+    for (const input of document.querySelectorAll(`input[type=text][data-id="${s.id}"]`))
+      if (document.activeElement !== input) input.value = spkName(s.id);
+  }
+  if (!S.speakers.length) {
+    const msg = S.duration < 10 ? 'Listening… speakers appear after 10 seconds.'
+      : (S.unsure || []).length ? 'Checking who is speaking…' : 'No speech yet.';
+    list.replaceChildren(el('p', 'empty', msg)); tlist.replaceChildren(el('p', 'empty', msg));
+    list.dataset.ids = tlist.dataset.ids = '';
+  }
+  const sel = $('voiceWho'), want = ['all', ...speakers().map(s => String(s.id))];
+  const have = [...sel.options].map(o => o.value);
+  if (want.join() !== have.join() || [...sel.options].some((o, i) => i && o.text !== spkName(+o.value))) {
+    sel.replaceChildren(new Option('Everyone', 'all'), ...speakers().map(s => new Option(spkName(s.id), String(s.id))));
+    if (!want.includes(voiceWho)) voiceWho = 'all';
+    sel.value = voiceWho;
+  }
+}
+
+// Drawing is coalesced to one per animation frame; the summaries (medians
+// over the whole session) are refreshed every couple of seconds. While
+// recording, the close-up is redrawn every frame and the views below a
+// dozen times a second, both by the smooth clock, so they glide.
+let drawQueued = false, statsAt = 0, belowAt = 0;
+function drawSoon() {
+  if (drawQueued) return; drawQueued = true;
+  const go = () => { if (!drawQueued) return; drawQueued = false; if (S && S.status !== 'idle') draw(true); };
+  requestAnimationFrame(go);
+  setTimeout(go, 250);             // animation frames pause in a hidden window; keep up anyway
+}
+function draw(all) {
+  const now = performance.now(), stats = now - statsAt > (running() ? 2000 : 30000);
+  if (stats) statsAt = now;
+  if (now - rangesAt > (running() ? 2000 : 30000) || !rangesAt) { rangesAt = now; refreshRanges(); }
+  drawClose();
+  if (!all && now - belowAt < 80) return;
+  belowAt = now;
+  if (layout === 'track') { drawTracks(); if (stats) renderTrackVoice(); }
+  else { drawTimeline(); drawCardVoice(stats); }
+}
+function frameLoop() {
+  if (S && running() && !document.hidden) draw(false);
+  requestAnimationFrame(frameLoop);
+}
+requestAnimationFrame(frameLoop);
+
+// ---- close-up ---------------------------------------------------------------------------------
+
+const CL = { l: 112, r: 44, lane: 14, gap: 3, h: 230 };
+let closeGeom = null, closeHover = null;
+const CLOSE_SERIES = { pitch: [['f0', []]], res: [['f1', []], ['f2', [6, 3]], ['f3', [1.5, 3]]], loud: [['loudness', []]], hnr: [['hnr', []]] };
+const CLOSE_TITLE = { pitch: ['Pitch', 'Hz'], res: ['Resonance', 'Hz'], loud: ['Loudness', ''], hnr: ['Breathiness', 'dB'] };
+const cssVar = (v) => { const m = /^var\((--[^)]+)\)$/.exec(v); return m ? getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim() : v; };
+function drawClose() {
+  const card = $('closeCard'); if (card.hidden) return;
+  const canvas = $('closeCanvas'), W = $('close').clientWidth || 800;
+  const spk = speakers(), rows = spk.length + 1;              // each speaker, then "not sure yet"
+  const top = 4, chartTop = top + rows * (CL.lane + CL.gap) + 10, H = chartTop + CL.h + 22;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); canvas.style.height = H + 'px';
+  }
+  const g = canvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const t1 = Math.max(nowT(), closeSpan), t0 = t1 - closeSpan, plotW = W - CL.l - CL.r;
+  const x = (t) => CL.l + (t - t0) / closeSpan * plotW;
+  const col = { grid: cssVar('var(--grid)'), axis: cssVar('var(--axis)'), text: cssVar('var(--text-primary)'), muted: cssVar('var(--muted)'),
+                lane: cssVar('var(--lane)'), lava: cssVar('var(--lava)'), rec: cssVar('var(--rec)') };
+  g.font = '600 12px system-ui, sans-serif'; g.textBaseline = 'middle';
+  // speaker lanes
+  const rowY = new Map(); spk.forEach((s, i) => rowY.set(s.id, top + i * (CL.lane + CL.gap))); rowY.set(PENDING, top + spk.length * (CL.lane + CL.gap));
+  for (const [id, y] of rowY) {
+    g.fillStyle = col.lane; g.fillRect(CL.l, y, plotW, CL.lane);
+    g.fillStyle = id === PENDING ? col.muted : col.text; g.textAlign = 'right';
+    const nm = spkName(id); g.fillText(nm.length > 14 ? nm.slice(0, 13) + '…' : nm, CL.l - 8, y + CL.lane / 2);
+  }
+  g.save(); g.beginPath(); g.rect(CL.l, 0, plotW, H); g.clip();
+  const bar = (a, b, id) => { const y = rowY.get(id); if (y == null || b < t0 || a > t1) return;
+    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1)); g.fillStyle = cssVar(spkColor(id)); g.fillRect(xa, y + 2, Math.max(1.5, xb - xa), CL.lane - 4); };
+  for (const [a, b, k] of S.turns || []) bar(a, b, k);
+  for (const [a, b] of S.unsure || []) bar(a, b, PENDING);
+  g.restore();
+  // value axis
+  const series = CLOSE_SERIES[closeWhat], [title, unit] = CLOSE_TITLE[closeWhat];
+  const i0 = lower(t0 - 0.05), i1 = lower(t1 + 0.05), lab = labels(i0, i1);
+  let lo = Infinity, hi = -Infinity;
+  for (const [key] of series) for (let i = i0; i < i1; i++) { if (lab[i - i0] === NOBODY) continue; const v = F.v[key][i]; if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  [lo, hi] = scaled(closeWhat, lo, hi);
+  const gd = Nav.guide(), marks = closeWhat === 'pitch' ? [['floor', gd.floor], ['ceiling', gd.ceiling]].filter(([, v]) => v != null) : [];
+  if (!isFinite(lo)) { lo = closeWhat === 'pitch' ? 80 : 0; hi = closeWhat === 'pitch' ? 300 : 1; }
+  if (scaleMode === 'fit') for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (hi <= lo) hi = lo + 1;
+  if (scaleMode !== 'fixed' || closeWhat !== 'pitch') { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+  const yv = (v) => chartTop + (1 - (v - lo) / (hi - lo)) * CL.h;
+  g.strokeStyle = col.grid; g.lineWidth = 1; g.strokeRect(CL.l + 0.5, chartTop + 0.5, plotW - 1, CL.h - 1);
+  g.textAlign = 'right'; g.fillStyle = col.text; g.fillText(title, CL.l - 8, chartTop + 10);
+  g.font = '11px system-ui, sans-serif'; g.fillStyle = col.muted;
+  const fmtV = (v) => unit === 'Hz' ? `${Math.round(v)} Hz` : unit === 'dB' ? `${v.toFixed(0)} dB` : v.toFixed(2);
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4, y = yv(v);
+    if (k > 0 && k < 4) { g.strokeStyle = col.grid; g.beginPath(); g.moveTo(CL.l, y); g.lineTo(W - CL.r, y); g.stroke(); }
+    if (k > 0) g.fillText(fmtV(v), CL.l - 8, Math.max(chartTop + 26, y));
+  }
+  // floor / ceiling
+  g.save(); g.beginPath(); g.rect(CL.l, chartTop, plotW, CL.h); g.clip();
+  for (const [kind, v] of marks) {
+    const y0 = yv(v);
+    g.globalAlpha = 0.07; g.fillStyle = col.lava;
+    if (kind === 'floor') g.fillRect(CL.l, y0, plotW, chartTop + CL.h - y0); else g.fillRect(CL.l, chartTop, plotW, y0 - chartTop);
+    g.globalAlpha = 1; g.strokeStyle = col.lava; g.lineWidth = 1.5; g.setLineDash([5, 3]);
+    g.beginPath(); g.moveTo(CL.l, y0); g.lineTo(W - CL.r, y0); g.stroke(); g.setLineDash([]);
+  }
+  // time grid
+  g.strokeStyle = col.grid; g.lineWidth = 1; g.fillStyle = col.muted; g.textAlign = 'center';
+  const ticks = VoiceCharts.ticks(t0, t1, plotW);
+  for (const t of ticks) { g.beginPath(); g.moveTo(x(t), chartTop); g.lineTo(x(t), chartTop + CL.h); g.stroke(); }
+  // the voice: a line per speaker and input, broken at gaps
+  for (const [key, dash] of series) {
+    g.setLineDash(dash); g.lineWidth = 2; g.lineJoin = 'round'; g.lineCap = 'round';
+    // One path per speaker and input: frames of two inputs at the same moment
+    // are two voices, not one line zig-zagging between them.
+    const lastAt = new Map(), paths = new Map();              // "label:src" -> time of its last point, path
+    for (let i = i0; i < i1; i++) {
+      const k = lab[i - i0], v = F.v[key][i];
+      if (k === NOBODY || v !== v) continue;
+      const id = k + ':' + F.src[i], px = x(F.t[i]), py = yv(v), prev = lastAt.get(id);
+      if (!paths.has(id)) paths.set(id, [k, new Path2D()]);
+      const p = paths.get(id)[1];
+      if (prev != null && F.t[i] - prev < 0.035) p.lineTo(px, py); else p.moveTo(px, py);
+      lastAt.set(id, F.t[i]);
+    }
+    for (const [k, p] of paths.values()) { g.strokeStyle = cssVar(spkColor(k)); g.stroke(p); }
+  }
+  g.setLineDash([]);
+  g.restore();
+  // lava labels on the right, time labels below
+  g.font = '600 10px system-ui, sans-serif'; g.textAlign = 'left';
+  for (const [, v] of marks) { const y0 = yv(v); if (y0 >= chartTop && y0 <= chartTop + CL.h) { g.fillStyle = col.lava; g.fillText(Math.round(v), W - CL.r + 4, y0); } }
+  g.font = '11px system-ui, sans-serif'; g.fillStyle = col.muted; g.textAlign = 'center';
+  for (const t of ticks) g.fillText(tenths(t), x(t), chartTop + CL.h + 12);
+  if (running()) { g.strokeStyle = col.rec; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x(t1) - 1, top); g.lineTo(x(t1) - 1, chartTop + CL.h); g.stroke(); }
+  if (closeHover != null && closeHover.t >= t0) {
+    g.strokeStyle = col.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x(closeHover.t), top); g.lineTo(x(closeHover.t), chartTop + CL.h); g.stroke();
+  }
+  closeGeom = { W, t0, t1, plotW, top, bottom: chartTop + CL.h };
+  const leg = $('closeLegend'), want = [...spk.map(s => s.id), PENDING].map(id => `${id}|${spkName(id)}`).join(',') + closeWhat;
+  if (leg.dataset.k !== want) {
+    leg.dataset.k = want; leg.replaceChildren();
+    for (const id of [...spk.map(s => s.id), PENDING]) {
+      const sp = el('span'); const i = el('i'); i.style.background = spkColor(id); sp.append(i, document.createTextNode(spkName(id))); leg.append(sp);
+    }
+    if (closeWhat === 'res') for (const [label, d] of [['F1 mouth opening', ''], ['F2 tongue position', '6 3'], ['F3 tract length', '1.5 3']]) {
+      const sp = el('span'); const i = el('i');
+      i.style.background = d ? `repeating-linear-gradient(90deg, var(--text-secondary) 0 ${d.split(' ')[0]}px, transparent 0 ${+d.split(' ')[0] + +d.split(' ')[1]}px)` : 'var(--text-secondary)';
+      sp.append(i, document.createTextNode(label)); leg.append(sp);
+    }
+  }
+  if (closeHover) closeTip();
+}
+// Hover on the close-up: the moment's speakers and measures.
+function closeTip() {
+  const tip = $('tooltip'), t = closeHover.t;
+  tip.classList.add('tt'); tip.replaceChildren(el('div', 't', tenths(t)));
+  const i0 = lower(t - 0.006), i1 = lower(t + 0.006), lab = labels(i0, i1);
+  const who = (S.turns || []).filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
+  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : (S.unsure || []).some(([a, b]) => a <= t && t < b) ? 'Not sure yet who' : 'Nobody speaking'));
+  const [key] = CLOSE_SERIES[closeWhat][0], [title, unit] = CLOSE_TITLE[closeWhat];
+  for (let i = i0; i < i1; i++) {
+    const k = lab[i - i0]; if (k === NOBODY) continue;
+    const r = el('div', 'row'), v = closeWhat === 'res' ? [F.v.f1[i], F.v.f2[i], F.v.f3[i]] : [F.v[key][i]];
+    const txt = v.map(x => x !== x ? '—' : unit === 'Hz' ? `${Math.round(x)}` : unit === 'dB' ? x.toFixed(1) : x.toFixed(3)).join(' / ') + (unit ? ` ${unit}` : '');
+    r.append(el('span', null, `${spkName(k)} · ${title}`), el('b', null, txt)); tip.append(r);
+  }
+  tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight, ev = closeHover.ev;
+  let left = ev.clientX + 16; if (left + w > innerWidth - 8) left = ev.clientX - w - 16;
+  tip.style.left = `${Math.max(8, left)}px`; tip.style.top = `${Math.max(8, Math.min(innerHeight - h - 8, ev.clientY - h / 2))}px`;
+}
+$('close').addEventListener('pointermove', (ev) => {
+  if (!closeGeom) return;
+  const r = $('closeCanvas').getBoundingClientRect(), px = (ev.clientX - r.left) * (closeGeom.W / r.width);
+  if (px < CL.l || px > closeGeom.W - CL.r) { closeHover = null; $('tooltip').hidden = true; return; }
+  closeHover = { t: closeGeom.t0 + (px - CL.l) / closeGeom.plotW * (closeGeom.t1 - closeGeom.t0), ev };
+  if (!running()) drawSoon();
+});
+$('close').addEventListener('pointerleave', () => { closeHover = null; $('tooltip').hidden = true; $('tooltip').classList.remove('tt'); drawSoon(); });
+
+// Summary figures for the frames chosen by want(label), as voice.summary gives
+// them (plus the share past the pitch floor / ceiling).
+function summarise(want) {
+  const lab = labels(0, F.n), f0 = [], hnr = [];
+  let n = 0;
+  for (let i = 0; i < F.n; i++) {
+    if (!want(lab[i])) continue;
+    n++;
+    const p = F.v.f0[i], h = F.v.hnr[i];
+    if (p === p) f0.push(p);
+    if (h === h) hnr.push(h);
+  }
+  if (!n) return null;
+  const q = (a, x) => { const pos = (a.length - 1) * x, lo = Math.floor(pos); return a[lo] + (a[Math.min(a.length - 1, lo + 1)] - a[lo]) * (pos - lo); };
+  const secs = n * 0.01, out = [['Speech analysed', `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, '0')}`]];
+  if (f0.length) {
+    f0.sort((a, b) => a - b);
+    out.push(['Median pitch', `${Math.round(q(f0, 0.5))} Hz`], ['Pitch range', `${Math.round(q(f0, 0.1))}–${Math.round(q(f0, 0.9))} Hz`],
+             ['Voiced', `${Math.round(100 * f0.length / n)}%`]);
+  }
+  if (hnr.length) { hnr.sort((a, b) => a - b); out.push(['Median HNR', `${q(hnr, 0.5).toFixed(1)} dB`]); }
+  return [...out, ...Nav.guideStats(f0)];
+}
+
+// ---- card layout ------------------------------------------------------------------------------
+
+function drawTimeline() {
+  const host = $('timeline'), W = host.clientWidth || 800, ids = [...speakers().map(s => s.id), PENDING];
+  const H = Math.max(1, ids.length) * TL.lane + 24, plotW = W - TL.l - TL.r;
+  const [t0, t1] = view(), x = (t) => TL.l + (t - t0) / (t1 - t0) * plotW;
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  ids.forEach((k, i) => {
+    const y = i * TL.lane;
+    svgAdd(svg, 'line', { x1: TL.l, x2: W - TL.r, y1: y + TL.lane / 2, y2: y + TL.lane / 2, stroke: 'var(--grid)' });
+    const name = spkName(k);
+    svgAdd(svg, 'text', { x: TL.l - 10, y: y + TL.lane / 2 + 4, 'text-anchor': 'end', 'font-size': 12, 'font-weight': k === PENDING ? 400 : 600,
+      fill: k === PENDING ? 'var(--muted)' : 'var(--text-primary)' }).textContent = name.length > 16 ? name.slice(0, 15) + '…' : name;
+  });
+  for (const [a, b, k] of [...S.turns, ...(S.unsure || []).map(([a, b]) => [a, b, PENDING])]) {
+    if (b < t0 || a > t1) continue;
+    const i = ids.indexOf(k); if (i < 0) continue;
+    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
+    svgAdd(svg, 'rect', { x: xa, y: i * TL.lane + 5, width: Math.max(1.5, xb - xa), height: TL.lane - 10, rx: 2,
+      fill: spkColor(k), opacity: a >= S.grouped_until - 0.01 ? 0.45 : 1 });
+  }
+  const base = Math.max(1, ids.length) * TL.lane;
+  svgAdd(svg, 'line', { x1: TL.l, x2: W - TL.r, y1: base, y2: base, stroke: 'var(--axis)' });
+  for (const t of VoiceCharts.ticks(t0, t1, plotW))
+    svgAdd(svg, 'text', { x: x(t), y: base + 16, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }).textContent = t1 - t0 < 60 ? tenths(t) : fmtClock(t);
+  const nt = nowT();
+  if (running() && nt >= t0 && nt <= t1)
+    svgAdd(svg, 'line', { x1: x(nt), x2: x(nt), y1: 0, y2: base, stroke: 'var(--rec)', 'stroke-width': 1.5 });
+  host.replaceChildren(svg);
+}
+
+// The voice charts, from the frames here: the chosen speaker's frames (or
+// everyone's, including speech not matched yet) averaged into bins over the
+// part of the session shown.
+let vcShown = false, vcStats = null;
+function drawCardVoice(refreshStats) {
+  // Bins a fixed width in time, so a stretch of speech keeps its shape while it scrolls.
+  const [t0, t1] = view(), w = Math.max(0.01, (t1 - t0) / 1000);
+  const P = Math.max(1, Math.min(60000, Math.ceil(Math.max(nowT(), S.duration, 0.1) / w))), D = P * w;
+  const want = voiceWho === 'all' ? (k) => k >= 0 || k === PENDING : (k) => k === +voiceWho;
+  const i0 = lower(t0 - 1), i1 = lower(t1 + 1), lab = labels(i0, i1);
+  const sums = Object.fromEntries(KEYS.map(k => [k, new Float64Array(P)])), cnt = Object.fromEntries(KEYS.map(k => [k, new Uint32Array(P)]));
+  let any = false;
+  for (let i = i0; i < i1; i++) {
+    if (!want(lab[i - i0])) continue;
+    const b = Math.min(P - 1, Math.max(0, Math.floor(F.t[i] / D * P)));
+    for (const k of KEYS) { const v = F.v[k][i]; if (v === v) { sums[k][b] += v; cnt[k][b]++; any = true; } }
+  }
+  if (refreshStats || !vcStats) vcStats = summarise(want);
+  const empty = !any && !vcStats;
+  $('voiceEmpty').hidden = !empty;
+  $('voiceCharts').hidden = $('voiceMeta').hidden = empty;
+  if (empty) return;
+  const series = Object.fromEntries(KEYS.map(k => [k, Array.from(sums[k], (s, b) => cnt[k][b] ? s / cnt[k][b] : null)]));
+  const data = { duration: D, time: Array.from({ length: P }, (_, i) => D * (i + 0.5) / P), series, stats: vcStats || [], guideStats: false };
+  if (!vcShown || !VoiceCharts.update(data)) {
+    VoiceCharts.show(data, { host: $('voiceCharts'), tip: $('tooltip'), meta: $('voiceMeta'), table: null, view,
+      label: (t, sp) => sp < 60 ? tenths(t) : fmtClock(t),
+      range: (key, lo, hi) => [...scaled({ pitch: 'pitch', resonanceTime: 'res', loudness: 'loud', breathiness: 'hnr' }[key], lo, hi), scaleMode !== 'fit'] });
+    vcShown = true;
+  }
+}
+
+// ---- track layout -------------------------------------------------------------------------------
+
+const G = { l: 112, r: 44 };
+const FORMANTS = [
+  { id: 'f1', label: 'F1', plain: 'Mouth opening', dash: '' },
+  { id: 'f2', label: 'F2', plain: 'Tongue position', dash: '6 3' },
+  { id: 'f3', label: 'F3', plain: 'Tract length', dash: '1.5 3' }];
+const LANES = [
+  { key: 'pitch', title: 'Pitch', unit: 'Hz', h: 110, series: [{ id: 'f0' }] },
+  { key: 'res', title: 'Resonance', unit: 'Hz', h: 118, series: FORMANTS },
+  { key: 'loud', title: 'Loudness', unit: '', h: 64, series: [{ id: 'loudness' }] },
+  { key: 'hnr', title: 'Breathiness', sub: 'HNR, lower = breathier', unit: 'dB', h: 64, series: [{ id: 'hnr' }] },
+];
+let geom = null;
+
+// Frames of the chosen labels in [t0, t1], averaged per pixel column.
+function columns(key, i0, lab, want, t0, t1, n) {
+  const sum = new Float64Array(n), cnt = new Uint32Array(n), v = F.v[key];
+  for (let j = 0; j < lab.length; j++) {
+    if (!want(lab[j])) continue;
+    const i = i0 + j, x = v[i]; if (x !== x) continue;
+    const c = Math.floor((F.t[i] - t0) / (t1 - t0) * n); if (c < 0 || c >= n) continue;
+    sum[c] += x; cnt[c]++;
+  }
+  const out = [];
+  for (let c = 0; c < n; c++) out.push(cnt[c] ? sum[c] / cnt[c] : null);
+  return out;
+}
+
+function drawTracks() {
+  const host = $('tracks'), W = host.clientWidth || 800, [t0, t1] = view(), tspan = t1 - t0, plotW = W - G.l - G.r;
+  const x = (t) => G.l + (t - t0) / tspan * plotW;
+  const spk = [...speakers(), { id: PENDING }], LANE = 16, LG = 4;
+  const svg = document.createElementNS(NS, 'svg');
+  let y = 4; const rows = {};
+  for (const s of spk) { rows[s.id] = y; y += LANE + LG; }
+  const spkTop = 4; y += spk.length ? 12 : 0;
+  const lanes = LANES.map(l => { const o = { ...l, y }; y += l.h + 16; return o; });
+  const axisY = y - 6, H = axisY + 22;
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+
+  const step = VoiceCharts.ticks(t0, t1, plotW);
+  for (const t of step) {
+    svgAdd(svg, 'line', { x1: x(t), x2: x(t), y1: spkTop, y2: axisY, stroke: 'var(--grid)', 'stroke-width': 1 });
+    svgAdd(svg, 'text', { x: x(t), y: axisY + 15, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 11 }).textContent = tspan < 60 ? tenths(t) : fmtClock(t);
+  }
+  svgAdd(svg, 'line', { x1: G.l, x2: W - G.r, y1: axisY, y2: axisY, stroke: 'var(--axis)', 'stroke-width': 1 });
+
+  for (const s of spk) {
+    svgAdd(svg, 'rect', { x: G.l, y: rows[s.id], width: plotW, height: LANE, fill: 'var(--lane)', rx: 3 });
+    const nm = spkName(s.id);
+    svgAdd(svg, 'text', { x: G.l - 8, y: rows[s.id] + LANE / 2 + 4, 'text-anchor': 'end', fill: s.id === PENDING ? 'var(--muted)' : 'var(--text-primary)',
+      'font-size': 12, 'font-weight': s.id === PENDING ? 400 : 600 }).textContent = nm.length > 14 ? nm.slice(0, 13) + '…' : nm;
+  }
+  for (const [a, b, k] of [...S.turns, ...(S.unsure || []).map(([a, b]) => [a, b, PENDING])]) {
+    if (b < t0 || a > t1 || rows[k] == null) continue;
+    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
+    svgAdd(svg, 'rect', { x: xa, y: rows[k] + 2, width: Math.max(1.5, xb - xa), height: LANE - 4, rx: 2, fill: spkColor(k),
+      stroke: 'var(--surface-1)', 'stroke-width': 1, opacity: a >= S.grouped_until - 0.01 ? 0.45 : (shownT.length && !shownT.includes(k) ? 0.35 : 1) });
+  }
+
+  // Voice lanes: each shown speaker in their colour, and speech not matched to
+  // anyone yet in grey, so the newest words show straight away.
+  // Columns a fixed width in time (not tied to the left edge), so the lines
+  // keep their shape while the view scrolls.
+  const cols = Math.max(50, Math.round(plotW)), cw = tspan / cols, c0 = Math.floor(t0 / cw);
+  const i0 = lower(c0 * cw), i1 = lower(t1 + cw), lab = labels(i0, i1);
+  const who = [...shownT, PENDING];
+  const g = Nav.guide();
+  for (const lane of lanes) {
+    const lines = who.map(id => [id, lane.series.map(s => columns(s.id, i0, lab, (k) => k === id, c0 * cw, c0 * cw + (cols + 1) * cw, cols + 1))]);
+    let lo = Infinity, hi = -Infinity;
+    for (const [, per] of lines) for (const list of per) for (const v of list) if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    const marks = lane.key === 'pitch' ? [['floor', g.floor], ['ceiling', g.ceiling]].filter(([, v]) => v != null) : [];
+    [lo, hi] = scaled(lane.key, lo, hi);
+    if (!isFinite(lo)) { lo = lane.key === 'pitch' ? 80 : 0; hi = lane.key === 'pitch' ? 300 : 1; }
+    if (scaleMode === 'fit') for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    if (hi <= lo) hi = lo + 1;
+    if (scaleMode !== 'fixed' || lane.key !== 'pitch') { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+    const top = lane.y, h = lane.h, yv = (v) => top + (1 - (v - lo) / (hi - lo)) * h;
+    lane.scale = { lo, hi };
+    svgAdd(svg, 'rect', { x: G.l, y: top, width: plotW, height: h, fill: 'none', stroke: 'var(--grid)' });
+    for (const [kind, v] of marks) {
+      if (v < lo || v > hi) continue;
+      const y0 = yv(v), ry = kind === 'floor' ? y0 : top, rh = kind === 'floor' ? top + h - y0 : y0 - top;
+      svgAdd(svg, 'rect', { x: G.l, y: ry, width: plotW, height: Math.max(0, rh), fill: 'var(--lava)', opacity: 0.07 });
+      svgAdd(svg, 'line', { x1: G.l, x2: W - G.r, y1: y0, y2: y0, stroke: 'var(--lava)', 'stroke-width': 1.5, 'stroke-dasharray': '5 3' });
+      svgAdd(svg, 'text', { x: W - G.r + 4, y: y0 + 4, fill: 'var(--lava)', 'font-size': 10, 'font-weight': 600 }).textContent = Math.round(v);
+    }
+    svgAdd(svg, 'text', { x: G.l - 8, y: top + 13, 'text-anchor': 'end', fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 }).textContent = lane.title;
+    const unitTxt = (v) => lane.unit === 'Hz' ? `${Math.round(v)} Hz` : lane.unit === 'dB' ? `${v.toFixed(0)} dB` : v.toFixed(2);
+    svgAdd(svg, 'text', { x: G.l - 8, y: top + 27, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = unitTxt(hi);
+    svgAdd(svg, 'text', { x: G.l - 8, y: top + h, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = unitTxt(lo);
+    if (lane.sub) svgAdd(svg, 'text', { x: G.l - 8, y: top + 40, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = lane.sub;
+    if (lane.key === 'res') FORMANTS.forEach((f, i) => {
+      const ly = top + 44 + i * 14;
+      svgAdd(svg, 'line', { x1: G.l - 40, x2: G.l - 24, y1: ly - 4, y2: ly - 4, stroke: 'var(--text-secondary)', 'stroke-width': 2, 'stroke-dasharray': f.dash });
+      svgAdd(svg, 'text', { x: G.l - 8, y: ly, 'text-anchor': 'end', fill: 'var(--text-secondary)', 'font-size': 10 }).textContent = f.label;
+    });
+    for (const [id, per] of lines) lane.series.forEach((s, si) => {
+      let d = '', pen = false;
+      per[si].forEach((v, c) => {
+        const px = x((c0 + c + 0.5) * cw);
+        if (v == null || px < G.l || px > W - G.r) { pen = false; return; }
+        d += (pen ? 'L' : 'M') + px.toFixed(1) + ' ' + Math.max(top, Math.min(top + h, yv(v))).toFixed(1) + ' '; pen = true;
+      });
+      if (d) svgAdd(svg, 'path', { d, fill: 'none', stroke: spkColor(id), 'stroke-width': 1.75, 'stroke-linejoin': 'round',
+        'stroke-linecap': 'round', 'stroke-dasharray': s.dash || '' });
+    });
+  }
+  const nt = nowT();
+  if (running() && nt >= t0 && nt <= t1)
+    svgAdd(svg, 'line', { x1: x(nt), x2: x(nt), y1: spkTop, y2: axisY, stroke: 'var(--rec)', 'stroke-width': 1.5 });
+  svgAdd(svg, 'line', { id: 'hover', x1: 0, x2: 0, y1: spkTop, y2: axisY, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' });
+  svg.dataset.w = W;
+  host.replaceChildren(svg);
+  geom = { W, x, t0, t1, plotW };
+  const leg = $('trackLegend'); leg.replaceChildren();
+  for (const id of who) {
+    const sp = el('span'); const i = el('i'); i.style.background = spkColor(id); sp.append(i, document.createTextNode(spkName(id))); leg.append(sp);
+  }
+  if (hoverT != null) hoverAt(hoverT, lastHoverEv);
+}
+
+function renderTrackVoice() {
+  const host = $('tvoice'); host.replaceChildren();
+  if (!shownT.length) { host.append(el('p', 'empty', speakers().length ? 'Tick Show voice next to a speaker to chart them.' : 'Waiting for speech.')); return; }
+  for (const id of shownT) {
+    const st = summarise((k) => k === id); if (!st) continue;
+    const head = el('div', 'voice-head'); const chip = el('span', 'chip'); chip.style.background = spkColor(id);
+    head.append(chip, el('span', null, spkName(id))); host.append(head);
+    const tiles = el('div', 'tiles');
+    for (const [k, v] of st) { const t = el('div', 'tile'); t.append(el('div', 'k', k), el('div', 'v', v)); tiles.append(t); }
+    host.append(tiles);
+  }
+}
+
+// Hover: who is speaking at that moment and the measures there.
+let hoverT = null, lastHoverEv = null;
+function tAt(ev) {
+  const svg = $('tracks').querySelector('svg'); if (!svg || !geom) return null;
+  const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * (geom.W / r.width);
+  if (px < G.l || px > geom.W - G.r) return null;
+  return geom.t0 + (px - G.l) / geom.plotW * (geom.t1 - geom.t0);
+}
+function hoverAt(t, ev) {
+  const tip = $('tooltip'), line = document.getElementById('hover');
+  if (t == null || !ev) { tip.hidden = true; line?.setAttribute('visibility', 'hidden'); return; }
+  line?.setAttribute('x1', geom.x(t)); line?.setAttribute('x2', geom.x(t)); line?.setAttribute('visibility', 'visible');
+  tip.classList.add('tt'); tip.replaceChildren(el('div', 't', tenths(t)));
+  const i = Math.min(F.n - 1, lower(t - 0.005));
+  const near = i >= 0 && F.n && Math.abs(F.t[i] - t) < 0.06;
+  const k = near ? labels(i, i + 1)[0] : NOBODY;
+  const who = (S.turns || []).filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
+  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : k === PENDING ? 'Not sure yet who' : 'Nobody speaking'));
+  if (near && k !== NOBODY) {
+    const row = (name, v) => { const r = el('div', 'row'); r.append(el('span', null, name), el('b', null, v)); tip.append(r); };
+    const hz = (v) => v === v ? `${Math.round(v)} Hz` : '—';
+    row('Pitch', hz(F.v.f0[i])); row('Mouth opening (F1)', hz(F.v.f1[i])); row('Tongue position (F2)', hz(F.v.f2[i]));
+    row('Tract length (F3)', hz(F.v.f3[i]));
+    row('Loudness', F.v.loudness[i] === F.v.loudness[i] ? F.v.loudness[i].toFixed(3) : '—');
+    row('Breathiness (HNR)', F.v.hnr[i] === F.v.hnr[i] ? `${F.v.hnr[i].toFixed(1)} dB` : '—');
+  }
+  tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let left = ev.clientX + 16; if (left + w > innerWidth - 8) left = ev.clientX - w - 16;
+  tip.style.left = `${Math.max(8, left)}px`; tip.style.top = `${Math.max(8, Math.min(innerHeight - h - 8, ev.clientY - h / 2))}px`;
+}
+$('tracks').addEventListener('pointermove', (ev) => { hoverT = tAt(ev); lastHoverEv = ev; hoverAt(hoverT, ev); });
+$('tracks').addEventListener('pointerleave', () => { hoverT = null; hoverAt(null); $('tooltip').classList.remove('tt'); });
+$('voiceCharts').addEventListener('pointerenter', () => $('tooltip').classList.remove('tt'));
+
+let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawSoon, 150); });
+
+// State twice a second while recording (turns, level); voice frames four
+// times a second, so the measures keep up with the voice.
+poll();
+setInterval(() => { if (running() || !document.hidden) poll(); }, 500);
+setInterval(() => { if (running()) pullFrames(); }, 250);
+</script>
+</body>
+</html>

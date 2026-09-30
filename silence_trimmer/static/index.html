@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silence Trimmer</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6; --accent-soft: #e6effa; --accent-text: #ffffff;
+    --warn: #9a4b10; --warn-soft: #fbeee3; --row-hover: #f1f0ec; --lava: #d6342a;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+    --series-5: #e87ba4; --series-6: #008300; --series-7: #4a3aa7; --series-8: #e34948;
+    --series-other: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --accent: #3987e5; --accent-soft: #1b2a3d; --accent-text: #ffffff;
+      --warn: #f0a868; --warn-soft: #3a2a1c; --row-hover: #232321; --lava: #f0625a;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+      --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --accent-soft: #1b2a3d; --accent-text: #ffffff;
+    --warn: #f0a868; --warn-soft: #3a2a1c; --row-hover: #232321; --lava: #f0625a;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .app { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 24px;
+    max-width: 1260px; margin: 0 auto; padding: 36px 16px 64px; }
+  main { min-width: 0; max-width: 960px; }
+  aside { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px);
+    display: flex; flex-direction: column; min-height: 0; }
+  #sideBody { overflow: auto; min-height: 0; }
+  .side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .side-title { font-size: 15px; margin: 0; }
+  .side-toggle { display: none; }
+  .side-empty, .side-note { color: var(--muted); font-size: 12px; margin: 10px 2px 0; }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; gap: 16px; padding-top: 16px; }
+    aside { position: static; max-height: none; background: var(--surface-1);
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; }
+    .side-title { display: none; }
+    .side-toggle { display: inline-flex; gap: 6px; align-items: center; font: inherit; font-weight: 600;
+      background: none; border: none; color: var(--text-primary); cursor: pointer; padding: 4px 0; }
+    .side-toggle::after { content: "▾"; color: var(--muted); }
+    .side-toggle[aria-expanded="true"]::after { content: "▴"; }
+    .side-head { margin-bottom: 0; }
+    aside:not(.open) #sideBody { display: none; }
+    aside.open #sideBody { margin-top: 10px; max-height: 50vh; }
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 17px; margin: 0 0 4px; }
+  h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  .lede { color: var(--text-secondary); margin: 0 0 24px; }
+  .sub { color: var(--text-secondary); font-size: 14px; margin: 0 0 14px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; margin-bottom: 16px; }
+  #drop { border: 2px dashed var(--axis); border-radius: 12px; background: var(--surface-1);
+    padding: 44px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  #drop strong { display: block; font-size: 18px; margin-bottom: 4px; }
+  #drop span { color: var(--text-secondary); font-size: 14px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bar { height: 8px; background: var(--grid); border-radius: 99px; overflow: hidden; margin-top: 12px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .bar.indeterminate > div { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+  .stage { font-weight: 600; }
+  .file { color: var(--text-secondary); font-size: 14px; overflow-wrap: anywhere; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 6px 0 16px; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .stat .v { font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  audio { width: 100%; margin: 4px 0 12px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .btn { display: inline-block; font: inherit; font-size: 14px; font-weight: 600; text-decoration: none;
+    cursor: pointer; border-radius: 8px; padding: 8px 14px; border: 1px solid var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); }
+  .btn.secondary { background: transparent; color: var(--accent); }
+  .btn.small { padding: 4px 10px; font-size: 13px; }
+  .link { color: var(--text-secondary); font-size: 14px; }
+  label.check { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; margin-top: 14px; }
+  label.check input { margin-top: 3px; }
+  label.check small { display: block; color: var(--muted); }
+  select, input[type=text] { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; }
+  .note { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 14px; font-size: 14px; }
+  .error { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 12px; }
+  details summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  details p { color: var(--text-secondary); font-size: 14px; margin: 10px 0; }
+  .levels { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px; margin: 8px 0 12px; }
+  .levels b { font-variant-numeric: tabular-nums; }
+  .table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { position: sticky; top: 0; background: var(--surface-1); color: var(--muted); font-weight: 500; }
+  #trials tr { cursor: pointer; }
+  #trials tr:hover { background: var(--row-hover); }
+  tr.chosen { background: var(--accent-soft); font-weight: 600; }
+  tr.current td:first-child::after { content: "  (playing)"; color: var(--muted); font-weight: 400; }
+  td.bad { color: var(--warn); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 12px; font-size: 14px; }
+  .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+
+  /* Speaker timeline: one labelled lane per speaker, so identity is position +
+     name, never colour alone. */
+  #timeline { position: relative; margin: 6px 0 4px; }
+  #timeline svg { display: block; width: 100%; }
+  .spk-list { display: grid; gap: 8px; margin-top: 14px; }
+  .spk { display: grid; grid-template-columns: 14px minmax(120px, 1fr) auto auto; gap: 6px 12px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .spk .chip { width: 12px; height: 12px; border-radius: 3px; }
+  .spk input { width: 100%; font-weight: 600; }
+  .spk .facts { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .spk .btns { display: flex; gap: 6px; }
+  @media (max-width: 560px) {
+    .spk { grid-template-columns: 14px 1fr; }
+    .spk .facts, .spk .btns { grid-column: 2; }
+  }
+
+  /* Voice charts (ported from the voice app). */
+  .vmeta { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 14px; }
+  .vmeta .stat { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; min-width: 110px; }
+  .vmeta .stat .v { font-size: 17px; }
+  .vcard { border-top: 1px solid var(--grid); padding: 12px 0 4px; }
+  .vcard .desc { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+  .legend i { width: 14px; height: 2px; border-radius: 1px; display: inline-block; }
+  .plot { position: relative; }
+  .plot svg { display: block; width: 100%; touch-action: none; }
+  .viewtoggle { font: inherit; font-size: 12px; color: var(--text-secondary); background: none;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  .tooltip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 150px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.14); font-size: 12px; }
+  .tooltip .t { color: var(--muted); margin-bottom: 4px; }
+  .tooltip .row { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+  .tooltip .row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .tooltip .row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tooltip .row span { color: var(--text-secondary); }
+  .tooltip .name { font-weight: 600; }
+  .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 14px; margin: 0 0 10px; }
+  .busy::before { content: ""; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--grid); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .updating { opacity: .45; pointer-events: none; transition: opacity .15s; }
+  code { font-size: 13px; }
+  .lib-list { display: grid; gap: 4px; }
+  .lib { display: flex; align-items: flex-start; gap: 4px; border-radius: 8px; border: 1px solid transparent; }
+  .lib:hover { background: var(--row-hover); }
+  .lib.current { background: var(--accent-soft); border-color: var(--accent); }
+  .lib .what { flex: 1; min-width: 0; text-align: left; font: inherit; color: inherit; background: none;
+    border: none; padding: 8px 4px 8px 10px; cursor: pointer; border-radius: 8px; }
+  .lib .what:disabled { cursor: default; }
+  .lib .nm { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib .meta { display: block; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .lib .meta.bad { color: var(--warn); }
+  .lib .del { background: none; border: none; color: var(--muted); cursor: pointer; font: inherit; font-size: 16px;
+    line-height: 1; padding: 8px 8px; border-radius: 6px; opacity: 0; }
+  .lib:hover .del, .lib.current .del, .lib .del:focus-visible { opacity: 1; }
+  .lib .del:hover { color: var(--warn); }
+  @media (hover: none) { .lib .del { opacity: 1; } }
+  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .views { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13px; }
+  .views a, .views span { padding: 5px 12px; text-decoration: none; color: var(--text-secondary); }
+  .views span { background: var(--accent-soft); color: var(--text-primary); font-weight: 600; }
+  .views a:hover { background: var(--row-hover); }
+
+  /* Zoom: one time window shared by the speaker timeline and every voice chart.
+     Sticky, so it stays in reach while scrolling through the charts. */
+  .zoombar { position: sticky; bottom: 12px; z-index: 6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px;
+    margin-bottom: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.12); }
+  .zoombar .zoom { display: inline-flex; gap: 4px; }
+  .icon { font: inherit; font-size: 13px; font-weight: 600; min-width: 30px; height: 28px; padding: 0 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+  .icon:hover { background: var(--row-hover); }
+  .icon:disabled { color: var(--muted); cursor: default; background: none; }
+  #zoomInfo { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 128px; }
+  #overview { flex: 1 1 260px; min-width: 200px; cursor: grab; touch-action: none; }
+  #overview svg { display: block; width: 100%; user-select: none; }
+  .zoombar .hint { color: var(--muted); font-size: 12px; }
+  #timeline svg, .plot svg { user-select: none; }
+  #timeline, #voiceCharts .plot { cursor: crosshair; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+<aside id="side" aria-label="Your recordings">
+  <div class="side-head">
+    <button class="side-toggle" id="sideToggle" aria-expanded="false" aria-controls="sideBody">
+      Your recordings <span id="libCount"></span></button>
+    <h2 class="side-title">Your recordings</h2>
+    <button class="btn primary small" id="newRec">New recording</button>
+  </div>
+  <div id="sideBody">
+    <div class="lib-list" id="libList"></div>
+    <p class="side-empty" id="libEmpty" hidden>Nothing yet. Drop a recording in to start.</p>
+    <p class="side-note">Saved in the app's <code>library</code> folder on this computer.</p>
+  </div>
+</aside>
+<main>
+  <div class="top">
+    <h1>Silence Trimmer</h1>
+    <div id="nav"></div>
+  </div>
+  <p class="lede">Cuts the dead air out of a voice recording, works out who is speaking, and charts each
+    voice. The cut-off is picked for each recording so quiet words are kept. Everything runs on this computer.</p>
+
+  <div id="drop" role="button" tabindex="0" aria-label="Choose a recording">
+    <strong>Drop a recording here</strong>
+    <span>or click to choose one. MP3, M4A, WAV, MKV, MP4 and most other formats work.</span>
+    <input id="picker" type="file" accept="audio/*,video/*,.mkv" hidden>
+  </div>
+
+  <section id="working" class="card" hidden aria-live="polite">
+    <div class="stage" id="stage">Starting</div>
+    <div class="file" id="fileName"></div>
+    <div class="bar" id="bar"><div></div></div>
+  </section>
+
+  <section id="failed" class="card" hidden>
+    <div class="error" id="errorText"></div>
+    <p><button class="btn secondary" id="retry">Try another file</button></p>
+  </section>
+
+  <section id="result" class="card" hidden>
+    <div class="file" id="resultName"></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Original</div><div class="v" id="sOrig"></div></div>
+      <div class="stat"><div class="k">Trimmed</div><div class="v" id="sTrim"></div></div>
+      <div class="stat"><div class="k">Removed</div><div class="v" id="sRemoved"></div></div>
+      <div class="stat"><div class="k">Cut-off used</div><div class="v" id="sThr"></div></div>
+    </div>
+    <p class="note" id="note" hidden></p>
+    <p class="busy" id="cutBusy" hidden aria-live="polite"></p>
+    <audio id="player" controls preload="metadata"></audio>
+    <div class="actions">
+      <a class="btn primary" id="download">Download trimmed MP3</a>
+      <a class="btn secondary" id="downloadM4a">Trimmed M4A</a>
+      <a class="btn secondary" id="downloadFull">Full recording</a>
+      <button class="btn secondary" id="another">All recordings</button>
+      <a class="link" id="segments">Download cut list (JSON)</a>
+    </div>
+    <label class="check"><input type="checkbox" id="speechOnly">
+      <span>Also remove coughs, clicks and other sounds that aren't speech
+        <small>Uses the speech detector. Quiet speech is still protected, but if a word goes missing, turn this off.</small></span></label>
+  </section>
+
+  <section id="speakers" class="card" hidden>
+    <h2>Who's speaking</h2>
+    <p class="sub" id="spkSummary"></p>
+    <div class="toolbar">
+      <label>Number of speakers
+        <select id="numSpeakers"><option value="">Work it out</option></select></label>
+      <span class="link">If you know how many people spoke, set it here; it's more reliable than guessing.</span>
+      <span class="busy" id="spkBusy" hidden aria-live="polite"></span>
+    </div>
+    <div id="timeline" aria-label="Speaker timeline of the trimmed recording. Click to jump there."></div>
+    <div class="spk-list" id="spkList"></div>
+    <audio id="spkPlayer" controls preload="none" hidden></audio>
+    <details id="turnsDetails">
+      <summary>Every turn, as a table</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Speaker</th><th>From</th><th>To</th><th>Length</th></tr></thead>
+        <tbody id="turnsTable"></tbody>
+      </table></div>
+    </details>
+  </section>
+
+  <section id="voice" class="card" hidden>
+    <h2>Voice</h2>
+    <p class="sub">Pitch, resonance, loudness and breathiness, measured on one speaker's speech only. Charts
+      share the trimmed recording's timeline with <em>Who's speaking</em>: gaps are where someone else is
+      talking, the line shows what's playing, and clicking a chart plays from there.</p>
+    <div class="toolbar">
+      <label>Speaker <select id="voiceSpeaker"></select></label>
+      <label title="Hide pitch where there is no harmonic structure: mostly trailing creak and fade-outs, which stretch the pitch axis">
+        <input type="checkbox" id="gate"> Hide low-confidence pitch</label>
+      <span id="guideSlot"></span>
+      <span class="link" id="voiceStatus"></span>
+    </div>
+    <div class="vmeta" id="voiceMeta"></div>
+    <div id="voiceCharts"></div>
+    <details>
+      <summary>All values, as a table</summary>
+      <p>Sampled once per second. A dash means the voice wasn't sounding, so the measure is undefined there.</p>
+      <div class="table-wrap"><table id="voiceTable"></table></div>
+    </details>
+  </section>
+
+  <div class="zoombar" id="zoombar" hidden>
+    <span class="zoom" role="group" aria-label="Zoom">
+      <button class="icon" id="zoomOut" aria-label="Zoom out">−</button>
+      <button class="icon" id="zoomIn" aria-label="Zoom in">+</button>
+      <button class="icon" id="zoomFit">Whole</button>
+    </span>
+    <span id="zoomInfo"></span>
+    <div id="overview" role="scrollbar" aria-orientation="horizontal" aria-controls="timeline voiceCharts"
+         aria-label="Whole recording. The box is the part shown in the charts; drag it to move along."></div>
+    <span class="hint">Drag across a chart to zoom in</span>
+  </div>
+
+  <section id="details" class="card" hidden>
+    <details>
+      <summary>How the cut-off was chosen</summary>
+      <p>Anything quieter than the cut-off for 0.8 seconds or more is removed. The app measured the
+        recording's background and voice, then tried every cut-off and picked the most aggressive one that
+        removes no <em>audible</em> sound: nothing clearly above the background and within 30 dB of the voice.</p>
+      <div class="levels">
+        <span>Background <b id="lBg"></b></span>
+        <span>Voice <b id="lVoice"></b></span>
+        <span>Audible above <b id="lAud"></b></span>
+      </div>
+      <p>Too much cut, or too little? Pick another cut-off to re-cut the file.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Cut-off</th><th>Kept</th><th>Audible sound removed</th></tr></thead>
+          <tbody id="trials"></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+</main>
+</div>
+<div class="tooltip" id="tooltip" hidden></div>
+<script src="/static/voice.js"></script>
+<script src="/static/nav.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let jobId = null, timer = null, S = null, names = {}, shownVersion = null, voiceRev = null;
+const SPK_COLORS = 8;
+const spkColor = (i) => i < SPK_COLORS ? `var(--series-${i + 1})` : 'var(--series-other)';
+const spkName = (i) => names[i] || `Speaker ${i + 1}`;
+
+function hms(s) {
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+const tenths = (s) => { const m = Math.floor(s / 60), r = s - m * 60; return `${m}:${r.toFixed(1).padStart(4, '0')}`; };
+
+const SECTIONS = ['working', 'failed', 'result', 'speakers', 'voice', 'zoombar', 'details'];
+function show(which) {
+  for (const id of SECTIONS) $(id).hidden = !which.includes(id);
+  $('drop').hidden = !which.includes('drop');
+}
+function fail(msg) { clearInterval(timer); busy(null); $('errorText').textContent = msg; show(['failed', 'drop']); }
+
+// ---- library ---------------------------------------------------------------
+
+// The sidebar list. The server re-reads the library folder on every request,
+// so saves copied in from elsewhere show up on the next refresh.
+async function loadLibrary() {
+  let items = [];
+  try { items = await (await fetch('/api/library')).json(); } catch { return; }
+  const list = $('libList');
+  list.replaceChildren();
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'lib' + (it.id === jobId ? ' current' : '');
+    const what = document.createElement('button'); what.className = 'what';
+    if (it.id === jobId) what.setAttribute('aria-current', 'true');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = it.name;   // untrusted: textContent
+    nm.title = it.name;
+    const meta = document.createElement('span'); meta.className = 'meta';
+    const when = it.created ? new Date(it.created * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    if (it.status === 'done') {
+      meta.textContent = `${hms(it.duration)} → ${hms(it.trimmed)} · ` +
+        (it.speakers === 1 ? '1 speaker' : `${it.speakers} speakers`) + ` · ${when}`;
+    } else if (it.status === 'working') {
+      meta.textContent = `Processing… · ${when}`;
+    } else { meta.textContent = `Didn't finish · ${when}`; meta.classList.add('bad'); }
+    what.append(nm, meta);
+    what.disabled = it.status === 'error';
+    what.addEventListener('click', () => {
+      if (it.id !== jobId) openJob(it.id);
+      $('side').classList.remove('open'); $('sideToggle').setAttribute('aria-expanded', 'false');
+    });
+    const del = document.createElement('button'); del.className = 'del'; del.textContent = '×';
+    del.title = 'Delete'; del.setAttribute('aria-label', `Delete ${it.name}`);
+    del.disabled = it.status === 'working';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Delete "${it.name}" and everything made from it? This can't be undone.`)) return;
+      await fetch(`/api/jobs/${it.id}`, { method: 'DELETE' });
+      if (it.id === jobId) goHome(); else loadLibrary();
+    });
+    row.append(what, del);
+    list.append(row);
+  }
+  $('libEmpty').hidden = items.length > 0;
+  $('libCount').textContent = items.length ? `(${items.length})` : '';
+}
+setInterval(loadLibrary, 10000);
+$('newRec').addEventListener('click', goHome);
+// Switching layouts keeps the open recording.
+// Top bar: Recordings | Live, and the Card / Track switch (which opens the
+// track view on the same recording).
+Nav.setLayout('card');
+Nav.mount($('nav'), { mode: 'recordings', onLayout: (l) => { location.href = Nav.recordingsHref(jobId, l); } });
+Nav.guideControl($('guideSlot'));
+VoiceCharts.setGuide(Nav.guide());
+Nav.onGuide((g) => VoiceCharts.setGuide(g));
+$('sideToggle').addEventListener('click', () => {
+  const open = $('side').classList.toggle('open');
+  $('sideToggle').setAttribute('aria-expanded', String(open));
+});
+
+function openJob(id, note) {
+  clearInterval(timer);
+  jobId = id; S = null; names = {}; shownVersion = null; voiceRev = null; view = null;
+  history.replaceState(null, '', `#${id}`);
+  Nav.rememberJob(id);
+  $('player').pause(); $('spkPlayer').pause();
+  loadLibrary();                           // move the highlight
+  $('fileName').textContent = note || '';
+  show(['working']);
+  setProgress('Opening', null);
+  poll();
+}
+
+function goHome() {
+  clearInterval(timer);
+  $('player').pause(); $('spkPlayer').pause();
+  history.replaceState(null, '', location.pathname);
+  Nav.rememberJob(null);
+  jobId = null; show(['drop']); loadLibrary();
+}
+
+// Inline progress, so a change updates its own card without hiding the page.
+function busy(scope, text) {
+  for (const [s, el] of [['cut', 'cutBusy'], ['speakers', 'spkBusy']]) {
+    const on = scope === s;
+    $(el).hidden = !on; if (on) $(el).textContent = text || 'Working…';
+  }
+  for (const id of ['timeline', 'spkList', 'voiceCharts', 'trials', 'numSpeakers', 'speechOnly'])
+    $(id).classList.toggle('updating', !!scope && (scope === 'cut' ? ['trials', 'speechOnly'].includes(id) : id !== 'trials'));
+}
+
+function setProgress(stage, frac) {
+  $('stage').textContent = stage || 'Working';
+  const bar = $('bar');
+  if (frac == null) { bar.classList.add('indeterminate'); bar.firstElementChild.style.width = ''; }
+  else { bar.classList.remove('indeterminate'); bar.firstElementChild.style.width = `${Math.round(frac * 100)}%`; }
+}
+
+async function upload(file) {
+  if (!file) return;
+  clearInterval(timer);
+  names = {};
+  $('fileName').textContent = file.name;
+  show(['working']);
+  setProgress('Uploading', 0);
+  const form = new FormData();
+  form.append('file', file);
+  // XHR rather than fetch, for upload progress on big recordings.
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/jobs');
+  xhr.upload.onprogress = (e) => e.lengthComputable && setProgress('Uploading', e.loaded / e.total);
+  xhr.onerror = () => fail('The upload failed. Is the Silence Trimmer window still open?');
+  xhr.onload = () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status !== 200) return fail(body.error || `Upload failed (${xhr.status}).`);
+    openJob(body.id, body.reused ? 'Already in your library, so this opens the saved result.' : file.name);
+  };
+  xhr.send(form);
+}
+
+// inline: the page stays up and only the changed card shows progress.
+function poll(inline) {
+  clearInterval(timer);
+  timer = setInterval(async () => {
+    let s, r;
+    try { r = await fetch(`/api/jobs/${jobId}`); }
+    catch { return fail('Lost contact with Silence Trimmer. Is its window still open?'); }
+    if (r.status === 404) return goHome();       // e.g. deleted, or an old address
+    try { s = await r.json(); } catch { return fail('Something went wrong reading this recording.'); }
+    if (s.error && s.status === 'error') return fail(s.error || 'Something went wrong.');
+    if (s.status === 'done') {
+      clearInterval(timer); busy(null);
+      const firstLoad = !S; S = s; render();
+      if (firstLoad || !inline) loadLibrary();   // new or finished: update the sidebar
+      return;
+    }
+    if (inline) busy(inline, s.stage && s.stage !== 'Starting' && s.stage !== 'Done' ? `${s.stage}…` : 'Updating…');
+    else setProgress(s.stage, s.frac);
+  }, inline ? 150 : 400);
+}
+
+async function change(settings, scope) {
+  busy(scope, 'Updating…');
+  const r = await fetch(`/api/jobs/${jobId}/settings`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) });
+  if (!r.ok) return fail((await r.json().catch(() => ({}))).error || 'Could not apply that change.');
+  poll(scope);
+}
+
+// Only the edited speaker is sent: the server anchors each name to the speech it
+// was given to, so re-sending the others would re-anchor them needlessly.
+let nameTimer = null, pendingNames = {};
+function saveNames(id) {
+  pendingNames[id] = names[id] || '';
+  clearTimeout(nameTimer);
+  nameTimer = setTimeout(() => {
+    const body = pendingNames; pendingNames = {};
+    fetch(`/api/jobs/${jobId}/names`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  }, 500);
+}
+
+// ---- rendering -------------------------------------------------------------
+
+function render() {
+  const a = S.analysis, o = S.output;
+  names = {}; for (const [k, v] of Object.entries(S.names || {})) names[+k] = v;
+  $('resultName').textContent = S.name;
+  $('sOrig').textContent = hms(a.duration);
+  $('sTrim').textContent = hms(o.duration);
+  $('sRemoved').textContent = `${Math.round(100 * (1 - o.duration / a.duration))}%`;
+  $('sThr').textContent = `${S.threshold} dB`;
+  $('note').hidden = !a.note; $('note').textContent = a.note || '';
+  // Only reload the player when the trimmed audio actually changed, so a
+  // speaker change doesn't stop playback or lose the position.
+  if (o.version !== shownVersion) {
+    const v = `v=${encodeURIComponent(o.version)}`;
+    $('player').src = `/api/jobs/${jobId}/audio?${v}`;
+    $('download').href = `/api/jobs/${jobId}/audio?download=1&${v}`;
+    $('downloadM4a').href = `/api/jobs/${jobId}/audio.m4a?${v}`;
+    $('downloadFull').href = `/api/jobs/${jobId}/original`;
+    $('segments').href = `/api/jobs/${jobId}/segments?${v}`;
+    shownVersion = o.version;
+    view = null;                           // a new cut is a new timeline
+  }
+  $('speechOnly').checked = !!S.speech_only;
+  renderTrials();
+  renderSpeakers();
+  show(['result', 'speakers', 'voice', 'zoombar', 'details']);
+  drawTimeline();
+  if (S.rev !== voiceRev) { voiceRev = S.rev; loadVoice(); }
+}
+
+function renderTrials() {
+  const a = S.analysis;
+  $('lBg').textContent = `${a.background.toFixed(0)} dB`;
+  $('lVoice').textContent = `${a.voice.toFixed(0)} dB`;
+  $('lAud').textContent = `${a.audible.toFixed(0)} dB`;
+  const body = $('trials');
+  body.replaceChildren();
+  for (const t of a.trials) {
+    const tr = document.createElement('tr');
+    tr.tabIndex = 0;
+    if (t.threshold === a.chosen) tr.classList.add('chosen');
+    if (t.threshold === S.threshold) tr.classList.add('current');
+    const cells = [`${t.threshold} dB${t.threshold === a.chosen ? ' (recommended)' : ''}`, hms(t.kept),
+                   t.lost > 0 ? `${t.lost.toFixed(1)} s` : 'none'];
+    cells.forEach((c, i) => { const td = document.createElement('td'); td.textContent = c;
+      if (i === 2 && t.lost > 0) td.className = 'bad'; tr.append(td); });
+    const pick = () => change({ threshold: t.threshold }, 'cut');
+    tr.addEventListener('click', pick);
+    tr.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), pick()));
+    body.append(tr);
+  }
+}
+
+function renderSpeakers() {
+  const spk = S.speakers || [];
+  const total = spk.reduce((n, s) => n + s.talk, 0) || 1;
+  $('spkSummary').textContent = spk.length === 0 ? 'No speech was found.'
+    : spk.length === 1 ? 'One speaker found.' : `${spk.length} speakers found. Rename them below.`;
+  const sel = $('numSpeakers');
+  if (sel.options.length === 1) for (let i = 1; i <= 8; i++) sel.append(new Option(String(i), String(i)));
+  sel.value = S.num_speakers ? String(S.num_speakers) : '';
+
+  const list = $('spkList');
+  list.replaceChildren();
+  for (const s of spk) {
+    const row = document.createElement('div'); row.className = 'spk';
+    const chip = document.createElement('span'); chip.className = 'chip'; chip.style.background = spkColor(s.id);
+    const name = document.createElement('input'); name.type = 'text'; name.value = spkName(s.id);
+    name.setAttribute('aria-label', `Name for speaker ${s.id + 1}`);
+    name.addEventListener('input', () => { names[s.id] = name.value.trim(); relabel(); saveNames(s.id); });
+    const facts = document.createElement('span'); facts.className = 'facts';
+    facts.textContent = `${hms(s.talk)} · ${Math.round(100 * s.talk / total)}% · ${s.turns} turn${s.turns === 1 ? '' : 's'}`;
+    const btns = document.createElement('span'); btns.className = 'btns';
+    const play = document.createElement('button'); play.className = 'btn secondary small'; play.textContent = 'Play';
+    play.addEventListener('click', () => {
+      const p = $('spkPlayer');
+      p.src = `/api/jobs/${jobId}/speaker/${s.id}/audio?r=${S.rev}`;
+      p.hidden = false; $('player').pause(); p.play();
+    });
+    const dl = document.createElement('a'); dl.className = 'btn secondary small'; dl.textContent = 'Download';
+    dl.dataset.spk = s.id;
+    btns.append(play, dl);
+    row.append(chip, name, facts, btns);
+    list.append(row);
+  }
+  relabel();
+
+  const tb = $('turnsTable');
+  tb.replaceChildren();
+  for (const [a, b, id] of S.output.turns) {
+    const tr = document.createElement('tr');
+    for (const c of [spkName(id), tenths(a), tenths(b), `${(b - a).toFixed(1)} s`]) {
+      const td = document.createElement('td'); td.textContent = c; td.dataset.spk = id; tr.append(td);
+    }
+    tb.append(tr);
+  }
+}
+
+function relabel() {
+  for (const a of document.querySelectorAll('#spkList a[data-spk]')) {
+    const id = +a.dataset.spk;
+    a.href = `/api/jobs/${jobId}/speaker/${id}/audio?download=1&name=${encodeURIComponent(spkName(id))}`;
+  }
+  for (const td of document.querySelectorAll('#turnsTable td:first-child')) td.textContent = spkName(+td.dataset.spk);
+  const vs = $('voiceSpeaker'), keep = vs.value;
+  vs.replaceChildren(...(S.speakers || []).map(s => new Option(spkName(s.id), String(s.id))));
+  if (keep !== '' && [...vs.options].some(o => o.value === keep)) vs.value = keep;
+  drawTimeline();
+}
+
+// ---- speaker timeline ------------------------------------------------------
+
+const NS = 'http://www.w3.org/2000/svg';
+// l/r match the voice charts' margins (voice.js PAD), so the time axes line up.
+const TL = { l: 120, r: 24, lane: 24, gap: 8, axis: 22 };
+
+// The part of the trimmed recording shown on the timeline and every voice
+// chart: [t0, t1] in seconds, or null for all of it.
+let view = null;
+const viewNow = () => view || [0, S?.output?.duration || 1];
+const tickLabel = (t, span) => span < 60 ? tenths(t) : hms(t);
+// x on a time chart of width W, for the current view.
+function xAt(t, W) { const [t0, t1] = viewNow(); return TL.l + (t - t0) / (t1 - t0) * (W - TL.l - TL.r); }
+
+function drawTimeline() {
+  const host = $('timeline');
+  if (!S?.output || host.offsetParent === null) return;
+  const spk = S.speakers || [];
+  const W = host.clientWidth || 800, H = spk.length * (TL.lane + TL.gap) + TL.axis;
+  const [t0, t1] = viewNow(), span = t1 - t0, x = (t) => xAt(t, W);
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  const add = (tag, attrs, parent = svg) => { const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); parent.append(el); return el; };
+  const laneY = (i) => i * (TL.lane + TL.gap);
+  spk.forEach((s, i) => {
+    const y = laneY(i);
+    add('rect', { x: TL.l, y, width: W - TL.l - TL.r, height: TL.lane, fill: 'var(--grid)', opacity: 0.35, rx: 4 });
+    const label = add('text', { x: TL.l - 10, y: y + TL.lane / 2 + 4, 'text-anchor': 'end',
+      fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 });
+    label.textContent = spkName(s.id).length > 16 ? spkName(s.id).slice(0, 15) + '…' : spkName(s.id);
+  });
+  const row = Object.fromEntries(spk.map((s, i) => [s.id, i]));
+  for (const [a, b, id] of S.output.turns) {
+    if (b < t0 || a > t1) continue;
+    const y = laneY(row[id] ?? 0), xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
+    // A 1px surface stroke keeps neighbouring turns visibly separate.
+    add('rect', { class: 'turn', x: xa, y: y + 3, width: Math.max(2, xb - xa), height: TL.lane - 6, rx: 3,
+      fill: spkColor(id), stroke: 'var(--surface-1)', 'stroke-width': 1, 'data-a': a, 'data-b': b, 'data-id': id });
+  }
+  const base = H - TL.axis + 4;
+  add('line', { x1: TL.l, x2: W - TL.r, y1: base, y2: base, stroke: 'var(--axis)', 'stroke-width': 1 });
+  // Same ticks as the voice charts (VoiceCharts.ticks), so they line up.
+  for (const t of VoiceCharts.ticks(t0, t1, W - TL.l - TL.r))
+    add('text', { x: x(t), y: base + 14, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 11 }).textContent = tickLabel(t, span);
+  add('line', { id: 'playhead', x1: x(0), x2: x(0), y1: 0, y2: base, stroke: 'var(--text-secondary)', 'stroke-width': 1.5, visibility: 'hidden' });
+  svg.dataset.w = W;
+  host.replaceChildren(svg);
+  drawOverview();
+  movePlayhead();
+}
+
+function movePlayhead() {
+  if (!S?.output) return;
+  const p = $('player'), t = p.currentTime || 0, dur = S.output.duration || 1;
+  // While playing a zoomed-in view, page along when the playhead reaches the edge.
+  if (view && !p.paused && (t > view[1] || t < view[0])) {
+    const span = view[1] - view[0]; setView(t - span * 0.05, t - span * 0.05 + span); return;
+  }
+  const [t0, t1] = viewNow(), on = t > 0 && t >= t0 && t <= t1;
+  const ph = document.getElementById('playhead');
+  if (ph) {
+    const px = xAt(t, +ph.ownerSVGElement.dataset.w);
+    ph.setAttribute('x1', px); ph.setAttribute('x2', px); ph.setAttribute('visibility', on ? 'visible' : 'hidden');
+  }
+  const oph = document.getElementById('oph');
+  if (oph) {
+    const ox = ovX(t / dur, +oph.ownerSVGElement.dataset.w);
+    oph.setAttribute('x1', ox); oph.setAttribute('x2', ox); oph.setAttribute('visibility', t > 0 ? 'visible' : 'hidden');
+  }
+  VoiceCharts.playhead(t);                 // the same moment on every voice chart
+}
+function seek(t) {
+  const p = $('player'); p.currentTime = t; $('spkPlayer').pause(); p.play().catch(() => {});
+  movePlayhead();
+}
+// Smooth playhead while playing (timeupdate alone only fires ~4 times a second).
+let raf = null;
+function tick() { movePlayhead(); raf = $('player').paused ? null : requestAnimationFrame(tick); }
+$('player').addEventListener('play', () => { if (!raf) raf = requestAnimationFrame(tick); });
+$('player').addEventListener('seeked', movePlayhead);
+$('timeline').addEventListener('pointermove', (ev) => {
+  const tip = $('tooltip'), mark = ev.target.closest?.('.turn');
+  if (!mark || drag?.moved) { tip.hidden = true; return; }
+  const a = +mark.dataset.a, b = +mark.dataset.b, id = +mark.dataset.id;
+  tip.replaceChildren();
+  const n = document.createElement('div'); n.className = 'name'; n.textContent = spkName(id);
+  const t = document.createElement('div'); t.className = 't';
+  t.textContent = `${tenths(a)} – ${tenths(b)} (${(b - a).toFixed(1)} s) · click to play`;
+  tip.append(n, t); tip.hidden = false;
+  tip.style.left = Math.min(innerWidth - tip.offsetWidth - 8, ev.clientX + 14) + 'px';
+  tip.style.top = Math.max(8, ev.clientY - tip.offsetHeight - 10) + 'px';
+});
+$('timeline').addEventListener('pointerleave', () => { $('tooltip').hidden = true; });
+$('player').addEventListener('timeupdate', movePlayhead);
+$('player').addEventListener('play', () => $('spkPlayer').pause());
+
+// ---- zoom ------------------------------------------------------------------
+
+const MIN_SPAN = 0.5;
+function setView(a, b) {
+  const dur = S.output.duration || 1, span = Math.min(dur, Math.max(MIN_SPAN, b - a));
+  a = Math.max(0, Math.min(dur - span, a));
+  view = span >= dur - 0.01 ? null : [a, a + span];
+  drawTimeline();
+  VoiceCharts.redraw();
+}
+function zoomBy(f, around) {
+  const [t0, t1] = viewNow(), p = $('player').currentTime;
+  const c = around ?? (p > t0 && p < t1 ? p : (t0 + t1) / 2);
+  const span = (t1 - t0) * f;
+  setView(c - (c - t0) * f, c - (c - t0) * f + span);
+}
+$('zoomIn').addEventListener('click', () => zoomBy(0.5));
+$('zoomOut').addEventListener('click', () => zoomBy(2));
+$('zoomFit').addEventListener('click', () => setView(0, S.output.duration));
+
+// Overview strip: the whole recording, with a box for the part shown in the
+// charts. Drag the box (or click beside it) to move along; scroll over it too.
+const OV = { l: 2, r: 2 };
+const ovX = (f, W) => OV.l + f * (W - OV.l - OV.r);
+function drawOverview() {
+  const host = $('overview'), W = host.clientWidth || 600, H = 30, dur = S.output.duration || 1;
+  const [t0, t1] = viewNow(), x = (t) => ovX(t / dur, W);
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  const add = (tag, attrs) => { const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); svg.append(el); return el; };
+  add('rect', { x: OV.l, y: 8, width: W - OV.l - OV.r, height: 14, fill: 'var(--grid)', opacity: 0.5, rx: 3 });
+  for (const [a, b, id] of S.output.turns)
+    add('rect', { x: x(a), y: 10, width: Math.max(1, x(b) - x(a)), height: 10, fill: spkColor(id), opacity: 0.7 });
+  add('rect', { x: x(t0), y: 2, width: Math.max(6, x(t1) - x(t0)), height: 26, rx: 4,
+    fill: 'var(--accent)', 'fill-opacity': view ? 0.1 : 0.04, stroke: 'var(--accent)', 'stroke-width': 1.5 });
+  add('line', { id: 'oph', x1: 0, x2: 0, y1: 2, y2: 28, stroke: 'var(--text-primary)', 'stroke-width': 1.5, visibility: 'hidden' });
+  svg.dataset.w = W;
+  host.replaceChildren(svg);
+  const span = t1 - t0;
+  $('zoomInfo').textContent = view ? `${tickLabel(t0, span)}–${tickLabel(t1, span)} of ${hms(dur)}` : `Whole recording, ${hms(dur)}`;
+  $('zoomFit').disabled = !view; $('zoomOut').disabled = !view;
+  $('zoomIn').disabled = span <= MIN_SPAN + 0.01;
+  const ov = $('overview');
+  ov.setAttribute('aria-valuemin', 0); ov.setAttribute('aria-valuemax', Math.round(dur));
+  ov.setAttribute('aria-valuenow', Math.round(t0));
+}
+function ovT(ev) {
+  const svg = $('overview').querySelector('svg'), rect = svg.getBoundingClientRect(), W = +svg.dataset.w;
+  const px = (ev.clientX - rect.left) * (W / rect.width);
+  return Math.max(0, Math.min(1, (px - OV.l) / (W - OV.l - OV.r))) * S.output.duration;
+}
+let ovDrag = null;
+$('overview').addEventListener('pointerdown', (ev) => {
+  if (!S?.output) return;
+  const t = ovT(ev), [t0, t1] = viewNow(), span = t1 - t0;
+  if (!view) return;                       // nothing to move while showing everything
+  if (t < t0 || t > t1) setView(t - span / 2, t + span / 2);   // click beside the box: centre it there
+  ovDrag = { t, v0: viewNow()[0] }; $('overview').setPointerCapture(ev.pointerId);
+});
+$('overview').addEventListener('pointermove', (ev) => {
+  if (!ovDrag) return;
+  const span = view[1] - view[0], a = ovDrag.v0 + ovT(ev) - ovDrag.t;
+  setView(a, a + span);
+});
+$('overview').addEventListener('pointerup', () => { ovDrag = null; });
+$('overview').addEventListener('wheel', (ev) => {
+  if (!view) return;
+  ev.preventDefault();
+  const span = view[1] - view[0], d = (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY);
+  setView(view[0] + Math.sign(d) * span * 0.15, view[0] + Math.sign(d) * span * 0.15 + span);
+}, { passive: false });
+$('overview').tabIndex = 0;
+$('overview').addEventListener('keydown', (ev) => {
+  if (!view || (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight')) return;
+  ev.preventDefault();
+  const span = view[1] - view[0], d = (ev.key === 'ArrowRight' ? 1 : -1) * span * 0.25;
+  setView(view[0] + d, view[0] + d + span);
+});
+
+// On the speaker timeline and every voice chart (they share the time axis):
+// click = play from there, drag across = zoom to that stretch, double-click =
+// whole recording, ctrl + scroll = zoom, shift + scroll or sideways swipe = move.
+function timeSvg(ev) {
+  const svg = ev.target.closest?.('#timeline svg, #voiceCharts .plot svg');
+  return svg && svg.querySelector('#playhead, .playhead') ? svg : null;
+}
+function tOn(svg, clientX, clamp) {
+  const rect = svg.getBoundingClientRect(), W = +svg.dataset.w, px = (clientX - rect.left) * (W / rect.width);
+  const [t0, t1] = viewNow(), f = (px - TL.l) / (W - TL.l - TL.r);
+  if (!clamp && (f < 0 || f > 1)) return null;
+  return t0 + Math.max(0, Math.min(1, f)) * (t1 - t0);
+}
+function showSel(svg, a, b) {
+  let r = svg.querySelector('.sel');
+  if (!r) {
+    r = document.createElementNS(NS, 'rect');
+    for (const [k, v] of Object.entries({ class: 'sel', y: 0, height: svg.getAttribute('height'), fill: 'var(--accent)', opacity: 0.14 }))
+      r.setAttribute(k, v);
+    r.style.pointerEvents = 'none'; svg.append(r);
+  }
+  const W = +svg.dataset.w;
+  r.setAttribute('x', xAt(a, W)); r.setAttribute('width', Math.max(0, xAt(b, W) - xAt(a, W)));
+}
+let drag = null;
+document.addEventListener('pointerdown', (ev) => {
+  if (ev.button !== 0 || !S?.output) return;
+  const svg = timeSvg(ev); if (!svg) return;
+  const t = tOn(svg, ev.clientX); if (t == null) return;
+  drag = { svg, t, x: ev.clientX, moved: false };
+});
+document.addEventListener('pointermove', (ev) => {
+  if (!drag) return;
+  if (Math.abs(ev.clientX - drag.x) > 5) drag.moved = true;
+  if (!drag.moved) return;
+  $('tooltip').hidden = true;
+  const t = tOn(drag.svg, ev.clientX, true);
+  showSel(drag.svg, Math.min(drag.t, t), Math.max(drag.t, t));
+});
+document.addEventListener('pointerup', (ev) => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (!d.moved) { seek(d.t); return; }
+  const t = tOn(d.svg, ev.clientX, true), a = Math.min(d.t, t), b = Math.max(d.t, t);
+  if (b - a >= 0.3) setView(a, b); else d.svg.querySelector('.sel')?.remove();
+});
+document.addEventListener('dblclick', (ev) => { if (timeSvg(ev) && view) setView(0, S.output.duration); });
+document.addEventListener('wheel', (ev) => {
+  const svg = timeSvg(ev); if (!svg || !S?.output) return;
+  if (ev.ctrlKey || ev.metaKey) {
+    ev.preventDefault(); zoomBy(ev.deltaY > 0 ? 1.25 : 0.8, tOn(svg, ev.clientX, true));
+  } else if (view && (ev.shiftKey || Math.abs(ev.deltaX) > Math.abs(ev.deltaY))) {
+    ev.preventDefault();
+    const [t0, t1] = viewNow(), span = t1 - t0, W = +svg.dataset.w;
+    const d = (ev.shiftKey && !ev.deltaX ? ev.deltaY : ev.deltaX) / (W - TL.l - TL.r) * span;
+    setView(t0 + d, t0 + d + span);
+  }
+}, { passive: false });
+
+// ---- voice -----------------------------------------------------------------
+
+let voiceReq = 0;
+async function loadVoice() {
+  const spk = $('voiceSpeaker').value;
+  if (spk === '') { $('voiceStatus').textContent = 'No speech to measure.'; return; }
+  const my = ++voiceReq;
+  $('voiceStatus').textContent = 'Measuring…';
+  VoiceCharts.clear();
+  // About 20 points a second (the finest openSMILE gives is 100), so zooming in
+  // shows real detail rather than a stretched overview.
+  const points = Math.min(40000, Math.max(1400, Math.ceil((S.output.duration || 0) * 20)));
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/speaker/${spk}/voice?gate=${$('gate').checked ? 1 : 0}&points=${points}`);
+    if (!r.ok) throw new Error('Could not measure this voice.');
+    const data = await r.json();
+    if (my !== voiceReq) return;
+    $('voiceStatus').textContent = '';
+    VoiceCharts.show(data, { host: $('voiceCharts'), tip: $('tooltip'), meta: $('voiceMeta'),
+                             table: $('voiceTable'), view: viewNow, label: tickLabel });
+    movePlayhead();
+    Nav.restoreScroll();                   // back where you were, after a reload
+  } catch (e) { if (my === voiceReq) $('voiceStatus').textContent = e.message; }
+}
+$('voiceSpeaker').addEventListener('change', loadVoice);
+$('gate').addEventListener('change', loadVoice);
+
+// ---- wiring ----------------------------------------------------------------
+
+$('speechOnly').addEventListener('change', (e) => change({ speech_only: e.target.checked }, 'cut'));
+$('numSpeakers').addEventListener('change', (e) =>
+  change({ num_speakers: e.target.value ? +e.target.value : null }, 'speakers'));
+const drop = $('drop');
+drop.addEventListener('click', () => $('picker').click());
+drop.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), $('picker').click()));
+$('picker').addEventListener('change', (e) => { upload(e.target.files[0]); e.target.value = ''; });
+for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); });
+for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, () => drop.classList.remove('over'));
+drop.addEventListener('drop', (e) => { e.preventDefault(); upload(e.dataTransfer.files[0]); });
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+$('another').addEventListener('click', goHome);
+$('retry').addEventListener('click', goHome);
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(drawTimeline, 150); });
+
+// Start: reopen the recording in the address (so a browser refresh stays put),
+// otherwise show the drop zone and the library.
+const startId = location.hash.slice(1);
+if (/^[0-9a-f]{12}$/.test(startId)) { loadLibrary(); openJob(startId); } else goHome();
+</script>
+</body>
+</html>

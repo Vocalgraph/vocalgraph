@@ -1,0 +1,4 @@
+# Windows batch files must keep CRLF; the macOS scripts must keep LF.
+*.cmd text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf

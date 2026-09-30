@@ -1,0 +1,25 @@
+[project]
+name = "silence-trimmer"
+version = "0.1.0"
+description = "Cut the dead air out of voice recordings, with the threshold picked automatically."
+readme = "README.md"
+# Pinned exactly in .python-version; uv installs that interpreter itself.
+requires-python = "==3.13.*"
+dependencies = [
+    "flask",
+    "imageio-ffmpeg",   # ships a static ffmpeg, so nobody installs it separately
+    "numpy",
+    "opensmile>=2.6.0",     # pitch, resonance, loudness, breathiness
+    "onnxruntime",          # runs the two speaker models (no PyTorch needed)
+    "scipy",                # clustering, exactly as pyannote does it
+    "waitress",
+    # Recording one app's sound on a Mac (ScreenCaptureKit). Mac only, so a
+    # Windows install never downloads them.
+    "pyobjc-framework-ScreenCaptureKit; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia; sys_platform == 'darwin'",
+    "pyobjc-framework-libdispatch; sys_platform == 'darwin'",
+]
+
+[tool.uv]
+# An app run from its folder, not a library: no build step, no wheel.
+package = false
