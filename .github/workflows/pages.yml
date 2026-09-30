@@ -1,0 +1,46 @@
+# Publishes the browser test page to GitHub Pages: web/pages-test, with the
+# openSMILE WebAssembly build (web/smile) and the two speaker models
+# (vocalgraph/models) beside it. No build step and no toolchain: the files are
+# copied as they are. Actions are pinned to exact commits.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "vocalgraph/models/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/models
+          cp -r web/pages-test/. _site/
+          cp -r web/smile _site/smile
+          cp vocalgraph/models/*.onnx _site/models/
+          touch _site/.nojekyll
+          ls -R _site | head -40
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

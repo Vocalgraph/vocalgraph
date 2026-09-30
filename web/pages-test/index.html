@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vocalgraph Browser Tests</title>
+<meta name="description" content="Checks that Vocalgraph's browser version works from GitHub Pages: the local helper, openSMILE and the speaker models.">
+<style>
+  :root { color-scheme: light; --page: #f9f9f7; --surface: #fcfcfb; --text: #0b0b0b; --muted: #52514e; --border: rgba(11,11,11,.1);
+    --ok: #0a7d45; --bad: #b3261e; --warn: #9a4b10; --accent: #2a78d6; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --text: #fff;
+    --muted: #c3c2b7; --border: rgba(255,255,255,.1); --ok: #4cc38a; --bad: #f0625a; --warn: #f0a868; --accent: #3987e5; } }
+  :root[data-theme="dark"] { color-scheme: dark; --page: #0d0d0d; --surface: #1a1a19; --text: #fff; --muted: #c3c2b7;
+    --border: rgba(255,255,255,.1); --ok: #4cc38a; --bad: #f0625a; --warn: #f0a868; --accent: #3987e5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 17px; margin: 0 0 6px; }
+  .lede, .muted { color: var(--muted); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin: 16px 0; }
+  .row { display: flex; gap: 10px; align-items: baseline; margin: 4px 0; }
+  .row b { min-width: 7ch; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  button { font: inherit; font-weight: 600; border-radius: 8px; padding: 8px 14px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  code, pre { font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--page); border-radius: 8px; padding: 10px; margin: 8px 0 0; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  a { color: var(--accent); }
+</style>
+<script>
+  // ?threads=N: multi-threaded processing, which needs cross-origin isolation. GitHub Pages can't
+  // send the headers for it; this service worker adds them (and reloads the page once).
+  if (+new URLSearchParams(location.search).get('threads') > 1) document.write('<script src="coi-serviceworker.js"><\/script>');
+</script>
+</head>
+<body>
+<main>
+  <h1>Vocalgraph browser tests</h1>
+  <p class="lede">Checks, from this GitHub Pages address, the three things Vocalgraph's browser version needs. Nothing you
+    record or measure leaves this computer: the test audio is built in, and results only go to the helper on this computer.</p>
+  <p><button id="go">Run the tests</button> <span class="muted" id="status"></span></p>
+
+  <section class="card"><h2>1. The local helper</h2>
+    <p class="muted">Start it first: in the Vocalgraph folder, <code>uv run python web/helper-prototype/helper.py</code>.
+      Play something in a program (music, a video) so there is sound to receive. Your browser may ask to let this site
+      reach devices on your computer or local network: allow it, that is what's being tested.</p>
+    <div id="helper"></div></section>
+  <section class="card"><h2>2. openSMILE (voice measurements)</h2><div id="smile"></div></section>
+  <section class="card"><h2>3. Speaker models</h2><div id="models"></div></section>
+  <section class="card"><h2>Results</h2><pre id="raw">Not run yet.</pre></section>
+
+  <footer>
+    Part of <a href="https://github.com/Vocalgraph/vocalgraph">Vocalgraph</a> (PolyForm Noncommercial 1.0.0).
+    Voice measurements use a WebAssembly build of <a href="https://github.com/audeering/opensmile">openSMILE</a> 3.0.2 by
+    audEERING GmbH, for non-commercial use only under the <a href="smile/LICENSE-openSMILE.txt">audEERING Research License</a>
+    (<a href="smile/NOTICE.md">build notes</a>). Speaker models: pyannote segmentation-3.0 (MIT) and WeSpeaker ResNet34-LM
+    (CC BY 4.0). Model runtime: ONNX Runtime Web (MIT).
+  </footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.all.min.js"
+  integrity="sha384-5URwgKAGS31PQX06sHDOIB6bk/2FTNB7z3n4trPAWV9sCv5xwV+qiGRxPkuHv6Gf" crossorigin="anonymous"></script>
+<script type="module">
+import { loadSmile } from './smile/smile.js';
+const P = new URLSearchParams(location.search), HELPER = 'http://127.0.0.1:8766', WS = 'ws://127.0.0.1:8766';
+const R = { page: location.origin + location.pathname, secure: isSecureContext, isolated: self.crossOriginIsolated,
+  threads: +(P.get('threads') || 1), cores: navigator.hardwareConcurrency };
+const $ = (id) => document.getElementById(id);
+function line(host, cls, label, text) { const d = document.createElement('div'); d.className = 'row';
+  const b = document.createElement('b'); b.className = cls; b.textContent = label; const s = document.createElement('span'); s.textContent = text;
+  d.append(b, s); $(host).append(d); }
+const bin = async (p, T) => new T(await (await fetch(p)).arrayBuffer());
+const median = (a) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+async function timed(fn, n) { await fn(); const t = []; for (let i = 0; i < n; i++) { const s = performance.now(); await fn(); t.push(performance.now() - s); } return +median(t).toFixed(1); }
+
+async function testHelper() {
+  const r = {};
+  try {
+    const t0 = performance.now();
+    const res = await fetch(HELPER + '/apps');
+    if (!res.ok) throw new Error(`the helper answered ${res.status}`);
+    const apps = await res.json();
+    r.apps = apps.length; r.apps_ms = Math.round(performance.now() - t0);
+    line('helper', 'ok', 'Reached', `the helper listed ${apps.length} programs in ${r.apps_ms} ms`);
+    const pick = P.get('app') ? { id: 'app:' + P.get('app') } : apps.find(a => a.playing);
+    if (!pick) { line('helper', 'warn', 'No sound', 'no program is making sound; play something and run again'); return r; }
+    r.app = pick.id;
+    await new Promise((resolve) => {
+      const ws = new WebSocket(`${WS}/capture?app=${encodeURIComponent(pick.id.replace(/^app:/, ''))}`);
+      ws.binaryType = 'arraybuffer';
+      let bytes = 0, first = null, peak = 0;
+      ws.onerror = () => { r.ws_error = true; line('helper', 'bad', 'Failed', 'the sound connection (WebSocket) was refused'); resolve(); };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') return;
+        const s = new Int16Array(ev.data, 8); bytes += s.byteLength; first ??= performance.now();
+        for (let i = 0; i < s.length; i++) { const v = Math.abs(s[i]); if (v > peak) peak = v; }
+      };
+      setTimeout(() => {
+        const secs = first ? (performance.now() - first) / 1000 : 0;
+        r.frames_per_s = secs ? Math.round(bytes / 4 / secs) : 0;
+        r.peak_dbfs = peak ? +(20 * Math.log10(peak / 32768)).toFixed(1) : null;
+        line('helper', r.frames_per_s > 40000 ? 'ok' : 'bad', 'Sound', `${r.frames_per_s} frames/s from ${pick.id.replace(/^app:/, '')} (48000 expected), loudest ${r.peak_dbfs ?? 'silent'} dBFS`);
+        try { ws.close(); } catch {}
+        resolve();
+      }, 4000);
+    });
+  } catch (e) {
+    r.error = String(e.message || e);
+    line('helper', 'bad', 'Not reached', `${r.error}. Is the helper running? Did the browser block or ask about local access?`);
+  }
+  return r;
+}
+
+async function testSmile() {
+  const r = {};
+  try {
+    const meta = await (await fetch('ref/smile/meta.json')).json();
+    const pcm = await bin('ref/smile/pcm.s16', Int16Array), ref = await bin('ref/smile/values.f32', Float32Array);
+    const smile = await loadSmile();
+    let t = performance.now(); const out = smile.process(pcm); r.ms = Math.round(performance.now() - t);
+    const W = meta.names.length, want = ['F0semitoneFrom27.5Hz_sma3nz', 'F1frequency_sma3nz', 'F2frequency_sma3nz', 'F3frequency_sma3nz', 'Loudness_sma3', 'HNRdBACF_sma3nz'];
+    r.frames = out.frames; r.expected_frames = meta.frames; r.columns = {};
+    let worst = 0;
+    for (const name of want) {
+      const c = meta.names.indexOf(name); let same = 0, maxd = 0;
+      for (let i = 0; i < Math.min(out.frames, meta.frames); i++) { const d = Math.abs(out.values[i * W + c] - ref[i * W + c]); if (d === 0) same++; if (d > maxd) maxd = d; }
+      r.columns[name] = { identical: same, largest_difference: maxd }; worst = Math.max(worst, maxd);
+    }
+    const good = out.frames === meta.frames && worst < 1e-4;
+    line('smile', good ? 'ok' : 'bad', good ? 'Matches' : 'Differs', `${out.frames} frames (desktop app: ${meta.frames}); largest difference from the desktop app ${worst.toExponential(1)}; 20 s of audio measured in ${r.ms} ms`);
+  } catch (e) { r.error = String(e.message || e); line('smile', 'bad', 'Failed', r.error); }
+  return r;
+}
+
+async function testModels() {
+  const r = {};
+  try {
+    ort.env.wasm.numThreads = R.threads;
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+    const [crop, segRef, fb, w, embRef] = await Promise.all(['crop', 'seg', 'fbank', 'weights', 'emb'].map(n => bin(`ref/models/${n}.f32`, Float32Array)));
+    const seg = await ort.InferenceSession.create('models/segmentation-3.0.onnx', { executionProviders: ['wasm'] });
+    const x = new ort.Tensor('float32', crop, [1, 1, 160000]);
+    let y; r.seg_ms = await timed(async () => { y = (await seg.run({ x })).y.data; }, 3);
+    let md = 0; for (let i = 0; i < y.length; i++) md = Math.max(md, Math.abs(y[i] - segRef[i])); r.seg_max_diff = md;
+    line('models', md < 1e-3 ? 'ok' : 'bad', 'Who talks', `matches the desktop app (largest difference ${md.toExponential(1)}), ${r.seg_ms} ms per 10 s window on the processor`);
+    for (const ep of (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'])) {
+      try {
+        const emb = await ort.InferenceSession.create('models/wespeaker-resnet34-LM-masked.onnx', { executionProviders: [ep] });
+        const B = ep === 'webgpu' ? 8 : 1, fbB = new Float32Array(fb.length * B), wB = new Float32Array(w.length * B);
+        for (let k = 0; k < B; k++) { fbB.set(fb, k * fb.length); wB.set(w, k * w.length); }
+        let e; const ms = await timed(async () => { e = (await emb.run({ fbank: new ort.Tensor('float32', fbB, [B, 998, 80]), weights: new ort.Tensor('float32', wB, [B, 125]) })).embedding.data; }, 3);
+        let dot = 0, na = 0, nb = 0; for (let i = 0; i < 256; i++) { dot += e[i] * embRef[i]; na += e[i] * e[i]; nb += embRef[i] * embRef[i]; }
+        const cos = dot / Math.sqrt(na * nb), per = ms / B;
+        r[ep] = { batch: B, ms, per_voiceprint_ms: +per.toFixed(1), cosine: +cos.toFixed(6) };
+        line('models', cos > 0.9999 ? 'ok' : 'bad', ep === 'webgpu' ? 'Graphics' : 'Processor',
+          `voiceprints ${per.toFixed(1)} ms each (${B} per call), same as the desktop app (similarity ${cos.toFixed(6)})`);
+        if (ep === 'webgpu' && per < 30) break;         // fast enough: no need to time the fallback
+      } catch (err) { r[ep] = { error: String(err.message || err) }; line('models', 'warn', ep, 'not available here: ' + r[ep].error); }
+    }
+  } catch (e) { r.error = String(e.message || e); line('models', 'bad', 'Failed', r.error); }
+  return r;
+}
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true; for (const id of ['helper', 'smile', 'models']) $(id).replaceChildren();
+  $('status').textContent = 'running…';
+  R.ua = navigator.userAgent; R.helper = await testHelper(); R.smile = await testSmile(); R.models = await testModels();
+  $('raw').textContent = JSON.stringify(R, null, 1);
+  const sent = await fetch(HELPER + '/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(R) }).then(r => r.ok).catch(() => false);
+  $('status').textContent = sent ? 'done; results sent to the helper on this computer' : 'done';
+  $('go').disabled = false;
+});
+if (P.get('auto') === '1') $('go').click();
+</script>
+</body>
+</html>

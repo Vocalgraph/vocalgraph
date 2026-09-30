@@ -3,3 +3,4 @@
 library/
 __pycache__/
 *.pyc
+web/helper-prototype/results.jsonl
