@@ -538,7 +538,7 @@ wheels = [
 ]
 
 [[package]]
-name = "silence-trimmer"
+name = "vocalgraph"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

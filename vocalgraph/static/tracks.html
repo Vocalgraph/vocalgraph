@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Silence Trimmer · Tracks</title>
+<title>Vocalgraph · Tracks</title>
 <style>
   :root {
     color-scheme: light;
@@ -218,7 +218,7 @@
 
 <main>
   <div class="top">
-    <h1>Silence Trimmer</h1>
+    <h1>Vocalgraph</h1>
     <div id="nav"></div>
   </div>
 
@@ -451,7 +451,7 @@ function upload(file) {
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/jobs');
   xhr.upload.onprogress = (e) => e.lengthComputable && setProgress('Uploading', e.loaded / e.total);
-  xhr.onerror = () => fail('The upload failed. Is the Silence Trimmer window still open?');
+  xhr.onerror = () => fail('The upload failed. Is the Vocalgraph window still open?');
   xhr.onload = () => {
     let body = {}; try { body = JSON.parse(xhr.responseText); } catch {}
     if (xhr.status !== 200) return fail(body.error || `Upload failed (${xhr.status}).`);
@@ -464,7 +464,7 @@ function poll(inline) {
   clearInterval(timer);
   timer = setInterval(async () => {
     let r, s;
-    try { r = await fetch(`/api/jobs/${jobId}`); } catch { return fail('Lost contact with Silence Trimmer. Is its window still open?'); }
+    try { r = await fetch(`/api/jobs/${jobId}`); } catch { return fail('Lost contact with Vocalgraph. Is its window still open?'); }
     if (r.status === 404) return goHome();
     try { s = await r.json(); } catch { return fail('Something went wrong reading this recording.'); }
     if (s.status === 'error') return fail(s.error || 'Something went wrong.');

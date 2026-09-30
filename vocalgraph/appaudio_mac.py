@@ -8,7 +8,7 @@ ScreenCaptureKit records an app's audio as part of a screen capture, so:
   * it needs the Screen Recording permission (System Settings -> Privacy &
     Security -> Screen & System Audio Recording). macOS asks the first time and
     gives it to the program that started the app: Terminal, when it's started
-    from "Start Silence Trimmer.command";
+    from "Start Vocalgraph.command";
   * a tiny, once-a-second video stream comes along with the audio and is
     ignored;
   * only apps with windows are offered (ScreenCaptureKit lists those), and
@@ -32,7 +32,7 @@ HIDDEN = {"com.apple.WindowManager", "com.apple.dock", "com.apple.controlcenter"
           "com.apple.wallpaper.agent", "com.apple.universalcontrol"}
 TIMEOUT = 10.0                       # seconds to wait for macOS to answer
 PERMISSION_HELP = ("Allow Screen & System Audio Recording for Terminal in System Settings -> Privacy & Security "
-                   "(or for whichever program started Silence Trimmer), then quit Silence Trimmer and start it again.")
+                   "(or for whichever program started Vocalgraph), then quit Vocalgraph and start it again.")
 
 
 def _macos() -> tuple[int, ...]:
@@ -160,7 +160,7 @@ def _classes():
     import objc
     from Foundation import NSObject
 
-    class _SilenceTrimmerAudioOutput(NSObject, protocols=[objc.protocolNamed("SCStreamOutput")]):
+    class _VocalgraphAudioOutput(NSObject, protocols=[objc.protocolNamed("SCStreamOutput")]):
         def stream_didOutputSampleBuffer_ofType_(self, stream, sbuf, kind):
             feed = getattr(self, "feed", None)
             if feed is None or kind != 1:                      # 1 = SCStreamOutputTypeAudio
@@ -172,13 +172,13 @@ def _classes():
             except Exception as exc:                            # ffmpeg gone, or a format problem
                 feed.fail(exc)
 
-    class _SilenceTrimmerStreamDelegate(NSObject, protocols=[objc.protocolNamed("SCStreamDelegate")]):
+    class _VocalgraphStreamDelegate(NSObject, protocols=[objc.protocolNamed("SCStreamDelegate")]):
         def stream_didStopWithError_(self, stream, error):
             feed = getattr(self, "feed", None)
             if feed is not None:
                 feed.fail(OSError(_explain(error)))
 
-    _Output, _Delegate = _SilenceTrimmerAudioOutput, _SilenceTrimmerStreamDelegate
+    _Output, _Delegate = _VocalgraphAudioOutput, _VocalgraphStreamDelegate
     return _Output, _Delegate
 
 
@@ -229,7 +229,7 @@ class AppCapture(Feed):
         queue = None
         try:
             import dispatch
-            queue = dispatch.dispatch_queue_create(b"silence-trimmer.app-audio", None)
+            queue = dispatch.dispatch_queue_create(b"vocalgraph.app-audio", None)
         except ImportError:
             pass                             # ScreenCaptureKit then uses a queue of its own
         res = self._stream.addStreamOutput_type_sampleHandlerQueue_error_(self._output, 1, queue, None)

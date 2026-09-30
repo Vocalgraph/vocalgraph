@@ -2,7 +2,7 @@
 
 ## pyannote.audio (code)
 
-`silence_trimmer/speakers.py` is a port of the speaker-diarization pipeline
+`vocalgraph/speakers.py` is a port of the speaker-diarization pipeline
 logic from pyannote.audio 3.4 (segmentation aggregation, speaker counting,
 agglomerative clustering, reconstruction), and
 `tools/export_embedding.py` reproduces its masked statistics pooling.
@@ -34,14 +34,14 @@ SOFTWARE.
 
 ## pyannote segmentation-3.0 (model)
 
-`silence_trimmer/models/segmentation-3.0.onnx`: pyannote/segmentation-3.0,
+`vocalgraph/models/segmentation-3.0.onnx`: pyannote/segmentation-3.0,
 MIT License, Copyright (c) 2022 CNRS (same terms as above). ONNX conversion
 by the sherpa-onnx project (https://github.com/k2-fsa/sherpa-onnx).
 https://huggingface.co/pyannote/segmentation-3.0
 
 ## WeSpeaker ResNet34-LM (model)
 
-`silence_trimmer/models/wespeaker-resnet34-LM-masked.onnx`: the WeSpeaker
+`vocalgraph/models/wespeaker-resnet34-LM-masked.onnx`: the WeSpeaker
 ResNet34-LM speaker-embedding model trained on VoxCeleb, as packaged by
 pyannote (https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM).
 Licensed under the Creative Commons Attribution 4.0 International License

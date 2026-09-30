@@ -37,6 +37,6 @@ def path(name: str) -> str:
             ok = False
         if not ok:
             raise RuntimeError(f"The {name} model is missing or damaged. "
-                               "Download Silence Trimmer again and replace this folder.")
+                               "Download Vocalgraph again and replace this folder.")
         _checked.add(name)
     return p

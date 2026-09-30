@@ -1,4 +1,4 @@
-"""Start the trimmer and open it in the browser: python -m silence_trimmer"""
+"""Start the trimmer and open it in the browser: python -m vocalgraph"""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +23,7 @@ def free_port(preferred: int) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Silence Trimmer")
+    ap = argparse.ArgumentParser(description="Vocalgraph")
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
@@ -38,7 +38,7 @@ def main() -> int:
     port = free_port(args.port)
     url = f"http://127.0.0.1:{port}/"
     atexit.register(cleanup)
-    print(f"Silence Trimmer is running at {url}")
+    print(f"Vocalgraph is running at {url}")
     print("Keep this window open while you use it. Close it to quit.")
     if not args.no_browser:
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()

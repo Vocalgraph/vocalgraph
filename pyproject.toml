@@ -1,7 +1,7 @@
 [project]
-name = "silence-trimmer"
+name = "vocalgraph"
 version = "0.1.0"
-description = "Cut the dead air out of voice recordings, with the threshold picked automatically."
+description = "Chart voices (pitch, resonance, loudness, breathiness), tell speakers apart, and cut the dead air out of recordings."
 readme = "README.md"
 # Pinned exactly in .python-version; uv installs that interpreter itself.
 requires-python = "==3.13.*"

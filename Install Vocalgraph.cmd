@@ -1,5 +1,5 @@
 @echo off
-rem Sets up Silence Trimmer in this folder. Double-click to run.
+rem Sets up Vocalgraph in this folder. Double-click to run.
 rem
 rem Everything - the uv tool, Python, and the packages - goes inside this
 rem folder, pinned to tested versions (uv below, Python in .python-version,
@@ -24,12 +24,12 @@ rem The download cache is not needed once installed; drop it to save space.
 "%UV%" cache clean >nul 2>&1
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'Silence Trimmer.lnk'));" ^
-    "$s.TargetPath='%~dp0Start Silence Trimmer.cmd'; $s.WorkingDirectory='%~dp0'; $s.Save()"
+    "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'Vocalgraph.lnk'));" ^
+    "$s.TargetPath='%~dp0Start Vocalgraph.cmd'; $s.WorkingDirectory='%~dp0'; $s.Save()"
 
 echo.
-echo Done. Start it with the "Silence Trimmer" shortcut on your desktop,
-echo or double-click "Start Silence Trimmer.cmd" in this folder.
+echo Done. Start it with the "Vocalgraph" shortcut on your desktop,
+echo or double-click "Start Vocalgraph.cmd" in this folder.
 pause
 exit /b 0
 

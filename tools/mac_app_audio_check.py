@@ -55,7 +55,7 @@ def main() -> None:
             say(f"   libdispatch bindings: no ({exc})")
     step("1. Apple framework bindings load", imports)
 
-    from silence_trimmer import appaudio
+    from vocalgraph import appaudio
     say(f"\n   appaudio uses {appaudio.AppCapture.__module__}; supported() = {appaudio.supported()}")
 
     apps = step("2. List apps (the first time, macOS should ask for Screen Recording permission)", appaudio.apps) or []
@@ -107,7 +107,7 @@ def main() -> None:
     step("3. Record 6 seconds of that app", capture)
 
     def with_ffmpeg():
-        from silence_trimmer import core, live
+        from vocalgraph import core, live
         cap = appaudio.AppCapture(pick["id"][4:], pick["name"])
         cap.start()
         out = os.path.join(APP_DIR, "mac-app-audio-check-ffmpeg.m4a")

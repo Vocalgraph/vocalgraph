@@ -25,7 +25,7 @@ from .timeline import Timeline, concat, intersect, union
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIBRARY = os.environ.get("SILENCE_TRIMMER_LIBRARY") or os.path.join(APP_DIR, "library")
+LIBRARY = os.environ.get("VOCALGRAPH_LIBRARY") or os.path.join(APP_DIR, "library")
 SPEECH_PAD = 0.25    # seconds kept around detected speech when removing other sounds
 AUDIO_IN_MEMORY = 2  # decoded recordings kept in memory; others are re-decoded on demand
 LIVE_DIR = os.path.join(LIBRARY, ".live")   # sessions in progress; no job.json, so not listed

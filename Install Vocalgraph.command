@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sets up Silence Trimmer in this folder (macOS). Double-click to run; the
+# Sets up Vocalgraph in this folder (macOS). Double-click to run; the
 # first time, right-click it and choose Open instead, so macOS will allow it.
 #
 # Everything - the uv tool, Python, and the packages - goes inside this folder,
@@ -29,8 +29,8 @@ echo "Installing Python and the app's packages. The first time takes a minute or
 "$UV" sync --locked
 # The download cache is not needed once installed; drop it to save space.
 "$UV" cache clean >/dev/null 2>&1 || true
-chmod +x "Start Silence Trimmer.command" "tools/Check Mac app audio.command"
+chmod +x "Start Vocalgraph.command" "tools/Check Mac app audio.command"
 
 echo
-echo 'Done. Start it by double-clicking "Start Silence Trimmer.command" in this folder.'
+echo 'Done. Start it by double-clicking "Start Vocalgraph.command" in this folder.'
 read -n 1 -s -r -p "Press any key to close."

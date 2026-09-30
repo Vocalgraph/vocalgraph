@@ -1,9 +1,10 @@
-# Silence Trimmer
+# Vocalgraph
 
-Cuts the dead air out of a voice recording: long pauses, the gap before you
-start talking, the minutes after you forgot to stop recording. It also works
-out **who is speaking**, lets you download each person's speech on its own, and
-charts each voice's **pitch, resonance, loudness and breathiness**.
+Charts voices: each speaker's **pitch, resonance, loudness and breathiness**,
+from a recording or live as you talk, and **who is speaking** when, even when
+two people talk at once. You can download each person's speech on its own.
+It also cuts the dead air out of a recording: long pauses, the gap before you
+start talking, the minutes after you forgot to stop recording.
 
 The cut-off is chosen for each recording, so quiet words and soft phrase
 endings are kept. Everything runs on your own computer; recordings are never
@@ -13,10 +14,10 @@ uploaded anywhere.
 
 You need an internet connection for this step only.
 
-**Windows:** double-click **`Install Silence Trimmer.cmd`**. When it finishes
-there is a **Silence Trimmer** shortcut on your desktop.
+**Windows:** double-click **`Install Vocalgraph.cmd`**. When it finishes
+there is a **Vocalgraph** shortcut on your desktop.
 
-**Mac:** right-click **`Install Silence Trimmer.command`** and choose **Open**
+**Mac:** right-click **`Install Vocalgraph.command`** and choose **Open**
 (the first time, macOS blocks a plain double-click on files from the
 internet). Then click **Open** again in the warning box.
 
@@ -26,7 +27,7 @@ inside this folder.
 ## Use it
 
 1. Start it: the desktop shortcut on Windows, or double-click
-   **`Start Silence Trimmer`** in this folder. A small window opens, and the app
+   **`Start Vocalgraph`** in this folder. A small window opens, and the app
    opens in your web browser.
 2. Drop a recording onto the page, or click to choose one. MP3, M4A, WAV, and
    video files like MKV or MP4 all work.
@@ -121,13 +122,13 @@ recorded too. Needs Windows 10 version 2004 or later.
 
 **On a Mac (macOS 13 or later): experimental, not yet tested.** Apps with windows
 are listed the same way. macOS treats this as screen recording, so the first
-time it asks for permission; allow **Terminal** (it starts Silence Trimmer) under
+time it asks for permission; allow **Terminal** (it starts Vocalgraph) under
 System Settings → Privacy & Security → Screen & System Audio Recording, then quit
 Terminal and start again. If you try it, please run
 **`tools/Check Mac app audio.command`** first (right-click → Open the first
 time), with something playing in the app you want to record, and send back the
 `mac-app-audio-check.txt` it writes in this folder. If you installed before this
-was added, run **Install Silence Trimmer.command** again to add what it needs.
+was added, run **Install Vocalgraph.command** again to add what it needs.
 
 Click **Stop and save** and the full recording (M4A, or FLAC if you chose it;
 several inputs in FLAC are saved as an MKA file) goes into **Your recordings** and
@@ -242,7 +243,7 @@ download anything you want to keep first.
 
 ## For the curious
 
-Python app in `silence_trimmer/`: `appaudio.py` records one program's sound on Windows (`appaudio_mac.py` on a Mac, untested), `core.py` picks the cut-off and cuts, `live.py` runs the
+Python app in `vocalgraph/`: `appaudio.py` records one program's sound on Windows (`appaudio_mac.py` on a Mac, untested), `core.py` picks the cut-off and cuts, `live.py` runs the
 speaker and voice analysis on live input,
 `speakers.py` identifies speakers, `sources.py` puts speakers on inputs of their own, `voice.py` measures voices, and `server.py`
 is the local web page (it listens on `127.0.0.1` only). Versions are pinned for
@@ -253,17 +254,17 @@ FFmpeg comes from the `imageio-ffmpeg` package.
 Speaker identification is a port of pyannote.audio's pipeline to ONNX Runtime
 and numpy, so no PyTorch is needed. It was checked frame for frame against the
 PyTorch pipeline and matched exactly. The models, bundled in
-`silence_trimmer/models/`, are pyannote **segmentation-3.0** (MIT) and the
+`vocalgraph/models/`, are pyannote **segmentation-3.0** (MIT) and the
 **WeSpeaker ResNet34-LM** voiceprint model (CC BY 4.0), re-exported by
 `tools/export_embedding.py`. Licences and attribution are in
 `THIRD_PARTY_NOTICES.md`.
 
-Run from a terminal with `uv run python -m silence_trimmer`
+Run from a terminal with `uv run python -m vocalgraph`
 (`--port N`, `--no-browser`).
 
 ## Licence: non-commercial use only
 
-Silence Trimmer's own code is under the **PolyForm Noncommercial License 1.0.0**
+Vocalgraph's own code is under the **PolyForm Noncommercial License 1.0.0**
 (`LICENSE.md`): free for personal use, study, research, hobby projects and
 non-profit organisations; not for commercial use.
 
