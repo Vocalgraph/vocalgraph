@@ -42,9 +42,9 @@
   <p><button id="go">Run the tests</button> <span class="muted" id="status"></span></p>
 
   <section class="card"><h2>1. The local helper</h2>
-    <p class="muted">Start it first: in the Vocalgraph folder, <code>uv run python web/helper-prototype/helper.py</code>.
-      Play something in a program (music, a video) so there is sound to receive. Your browser may ask to let this site
-      reach devices on your computer or local network: allow it, that is what's being tested.</p>
+    <p class="muted">If the helper isn't running, the page offers to start it (your browser asks first) or to download it.
+      Play something in a program (music, a video) so there is sound to receive. Your browser may also ask to let this
+      site reach devices on your computer or local network: allow it, that is what's being tested.</p>
     <div id="helper"></div></section>
   <section class="card"><h2>2. openSMILE (voice measurements)</h2><div id="smile"></div></section>
   <section class="card"><h2>3. Speaker models</h2><div id="models"></div></section>
@@ -73,9 +73,57 @@ const bin = async (p, T) => new T(await (await fetch(p)).arrayBuffer());
 const median = (a) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
 async function timed(fn, n) { await fn(); const t = []; for (let i = 0; i < n; i++) { const s = performance.now(); await fn(); t.push(performance.now() - s); } return +median(t).toFixed(1); }
 
+// What this page needs from the helper: PROTOCOL is how the two talk (a helper
+// on an older one can't work with this page); LATEST is the newest helper, to
+// suggest updating. DOWNLOAD is where to get it.
+const HELPER_PROTOCOL = 1, HELPER_LATEST = '0.2.0';
+const DOWNLOAD = 'https://github.com/Vocalgraph/vocalgraph/tree/main/web#browser-version-groundwork';
+const newer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+async function version(ms = 1500) {
+  try { const res = await fetch(HELPER + '/version', { signal: AbortSignal.timeout(ms) }); return res.ok ? await res.json() : null; }
+  catch { return null; }
+}
+function actions(...nodes) { const d = document.createElement('div'); d.className = 'row'; d.append(...nodes); $('helper').append(d); return d; }
+function link(text, href) { const a = document.createElement('a'); a.textContent = text; a.href = href; a.target = '_blank'; a.rel = 'noopener'; return a; }
+
+// Find the helper; if it isn't running, offer to start it by its vocalgraph:// link
+// (the browser asks first), and if it still doesn't answer, offer the download.
+async function ensureHelper() {
+  let v = await version();
+  if (v) return v;
+  line('helper', 'warn', 'Not running', "the helper isn't answering on this computer.");
+  const start = document.createElement('button'); start.textContent = 'Start the helper';
+  const row = actions(start, document.createTextNode(' '), link("Don't have it? Download the helper", DOWNLOAD));
+  return await new Promise((resolve) => {
+    start.addEventListener('click', async () => {
+      start.disabled = true; start.textContent = 'Starting…';
+      location.href = 'vocalgraph://start';               // the browser asks whether to open the helper
+      for (let t = 0; t < 30 && !v; t++) { await new Promise(res => setTimeout(res, 500)); v = await version(400); }
+      row.remove();
+      if (v) { line('helper', 'ok', 'Started', 'the helper started from its link'); resolve(v); return; }
+      line('helper', 'bad', "Didn't start", 'nothing answered within 15 seconds. The helper may not be installed yet:');
+      actions(link('Download the helper', DOWNLOAD), document.createTextNode(' then run the tests again.'));
+      resolve(null);
+    }, { once: true });
+  });
+}
+
 async function testHelper() {
   const r = {};
   try {
+    const v = await ensureHelper();
+    if (!v) { r.error = 'helper not running'; return r; }
+    r.version = v;
+    if ((v.protocol || 0) < HELPER_PROTOCOL) {
+      line('helper', 'bad', 'Too old', `helper ${v.version} can't work with this page; it needs a newer one.`);
+      actions(link('Download the new helper', DOWNLOAD));
+      r.error = 'helper too old'; return r;
+    }
+    if (newer(HELPER_LATEST, v.version)) {
+      line('helper', 'warn', 'Update', `helper ${v.version} works, but ${HELPER_LATEST} is available.`);
+      actions(link('Download the new helper', DOWNLOAD));
+    } else line('helper', 'ok', 'Version', `helper ${v.version} (up to date)`);
     const t0 = performance.now();
     const res = await fetch(HELPER + '/apps');
     if (!res.ok) throw new Error(`the helper answered ${res.status}`);
@@ -164,7 +212,8 @@ async function testModels() {
 $('go').addEventListener('click', async () => {
   $('go').disabled = true; for (const id of ['helper', 'smile', 'models']) $(id).replaceChildren();
   $('status').textContent = 'running…';
-  R.ua = navigator.userAgent; R.helper = await testHelper(); R.smile = await testSmile(); R.models = await testModels();
+  // The helper last: it may wait for a click on "Start the helper".
+  R.ua = navigator.userAgent; R.smile = await testSmile(); R.models = await testModels(); R.helper = await testHelper();
   $('raw').textContent = JSON.stringify(R, null, 1);
   const sent = await fetch(HELPER + '/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(R) }).then(r => r.ok).catch(() => false);
   $('status').textContent = sent ? 'done; results sent to the helper on this computer' : 'done';

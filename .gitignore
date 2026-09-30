@@ -4,3 +4,4 @@ library/
 __pycache__/
 *.pyc
 web/helper-prototype/results.jsonl
+web/helper-prototype/helper.log
