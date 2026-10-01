@@ -328,6 +328,7 @@
 </div>
 <div class="tooltip" id="tooltip" hidden></div>
 
+<script src="static/resonance.js"></script>
 <script src="static/nav.js"></script>
 <script>
 'use strict';
@@ -566,6 +567,9 @@ function renderSpeakers() {
     row.append(chip, name, acts, share);
     list.append(row);
   }
+  // Quiet voices behind the speakers (the browser version tells them apart)
+  if (S.background >= 0.5) list.append(el('p', 'sub', `Background voices, much quieter than the speakers ` +
+    `(a TV, a call in another room): ${hms(S.background)}. Shown on the Background lane, not counted as a speaker.`));
 }
 
 function relabel() {
@@ -636,6 +640,9 @@ async function loadVoices() {
   renderVoiceSummary(); renderValuesTable();
 }
 const voiceOf = (id) => V[`${id}-${$('gate').checked ? 1 : 0}`];
+// Each shown speaker's resonance trend (resonance.js), worked out once per voice data.
+const RT = new Map();
+const trendOf = (id) => { const d = voiceOf(id); if (!d) return null; if (!RT.has(d)) RT.set(d, Resonance.trend(d)); return RT.get(d); };
 
 function renderVoiceSummary() {
   const host = $('voiceSummary'); host.replaceChildren();
@@ -647,6 +654,8 @@ function renderVoiceSummary() {
     const tiles = el('div', 'tiles');
     for (const [k, v] of [...d.stats, ...Nav.guideStats(d.series.f0)]) { const t = el('div', 'tile'); t.append(el('div', 'k', k), el('div', 'v', v)); tiles.append(t); }
     host.append(tiles);
+    const tr = trendOf(id);
+    host.append(el('p', 'sub', tr?.summary ? tr.summary.text : tr ? 'Resonance trend: on the strip under Pitch, darker where it is darker and thicker.' : 'Resonance trend: not enough measured speech.'));
     host.append(el('div', 'sub', 'Resonance: middle 80% and median'));
     host.append(rangesSvg(d, id));
   }
@@ -731,11 +740,18 @@ function draw() {
   const svg = document.createElementNS(NS, 'svg');
   const layout = { speakers: [], lanes: [] };
 
-  // Speaker lanes.
+  // Speaker lanes, then the background's own lane when there is any.
   for (const s of spk) { layout.speakers.push({ id: s.id, y }); y += LANE + LG; }
+  const back = S.output.background || [], backY = back.length ? y : null;
+  if (back.length) y += LANE + LG;
   const spkTop = 4, spkBottom = y;
   y += 12;
-  for (const lane of LANES) { layout.lanes.push({ ...lane, y }); y += lane.h + 16; }
+  const data = shown.map(id => [id, voiceOf(id)]).filter(([, d]) => d);
+  for (const lane of LANES) {
+    layout.lanes.push({ ...lane, y }); y += lane.h + 16;
+    // the resonance trend, one row per shown speaker, right under pitch
+    if (lane.key === 'pitch' && data.length) { layout.strip = { y: y - 8, row: 22 }; y += data.length * 22 + 10; }
+  }
   const axisY = y - 6, H = axisY + 22;
   svg.setAttribute('width', W); svg.setAttribute('height', H);
 
@@ -757,6 +773,15 @@ function draw() {
     svgAdd(svg, 'text', { x: G.l - 8, y: r.y + LANE / 2 + 4, 'text-anchor': 'end', fill: 'var(--text-primary)',
       'font-size': 12, 'font-weight': 600 }).textContent = nm.length > 14 ? nm.slice(0, 13) + '…' : nm;
   }
+  if (backY != null) {
+    svgAdd(svg, 'rect', { x: G.l, y: backY, width: plotW, height: LANE, fill: 'var(--lane)', rx: 3 });
+    svgAdd(svg, 'text', { x: G.l - 8, y: backY + LANE / 2 + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 12 }).textContent = 'Background';
+    for (const [a, b] of back) {
+      if (b < t0 || a > t1) continue;
+      const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
+      svgAdd(svg, 'rect', { x: xa, y: backY + 4, width: Math.max(1.5, xb - xa), height: LANE - 8, rx: 2, fill: 'var(--muted)', opacity: 0.55 });
+    }
+  }
   for (const [a, b, id] of S.output.turns) {
     if (b < t0 || a > t1 || !rowOf[id]) continue;
     const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
@@ -765,8 +790,16 @@ function draw() {
       opacity: shown.length && !shown.includes(id) ? 0.35 : 1 });
   }
 
+  // Resonance trend rows.
+  if (layout.strip) data.forEach(([id], i) => {
+    const mid = layout.strip.y + i * layout.strip.row + layout.strip.row / 2;
+    svgAdd(svg, 'rect', { x: G.l, y: mid - 9, width: plotW, height: 18, fill: 'var(--lane)', rx: 3 });
+    svgAdd(svg, 'text', { x: G.l - 8, y: mid + 4, 'text-anchor': 'end', fill: 'var(--text-secondary)', 'font-size': 11 })
+      .textContent = data.length > 1 ? `${spkName(id).slice(0, 10)} resonance` : 'Resonance';
+    Resonance.drawStrip(svg, trendOf(id), { x, t0, t1, mid, h: 18 });
+  });
+
   // Voice lanes, drawn in each shown speaker's colour.
-  const data = shown.map(id => [id, voiceOf(id)]).filter(([, d]) => d);
   for (const lane of layout.lanes) {
     const top = lane.y, h = lane.h;
     // Scale fits what's on screen, so zooming in past a spike shows the detail around it.
@@ -778,16 +811,24 @@ function draw() {
     for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }   // always in view
     if (hi === lo) hi = lo + 1;
     const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+    // A pitch chart end the person set wins: exactly there, nothing added.
+    const set = lane.key === 'pitch' && !!Nav.axis();
+    if (set) [lo, hi] = Nav.withAxis(lo, hi);
     const yv = (v) => top + (1 - (v - lo) / (hi - lo)) * h;
     lane.scale = { lo, hi };
     svgAdd(svg, 'rect', { x: G.l, y: top, width: plotW, height: h, fill: 'none', stroke: 'var(--grid)' });
-    // Pitch floor / ceiling ("hot lava"): the side past each is shaded.
+    // Pitch floor / ceiling ("hot lava"): the side past each is shaded, also when the line is off the chart.
     for (const [kind, v] of marks) {
-      const y0 = yv(v), ry = kind === 'floor' ? y0 : top, rh = kind === 'floor' ? top + h - y0 : y0 - top;
+      const y0 = yv(Math.max(lo, Math.min(hi, v))), ry = kind === 'floor' ? y0 : top, rh = kind === 'floor' ? top + h - y0 : y0 - top;
       svgAdd(svg, 'rect', { x: G.l, y: ry, width: plotW, height: Math.max(0, rh), fill: 'var(--lava)', opacity: 0.07 });
+      if (v < lo || v > hi) continue;
       svgAdd(svg, 'line', { x1: G.l, x2: W - G.r, y1: y0, y2: y0, stroke: 'var(--lava)', 'stroke-width': 1.5, 'stroke-dasharray': '5 3' });
       svgAdd(svg, 'text', { x: W - G.r + 4, y: y0 + 4, fill: 'var(--lava)', 'font-size': 10, 'font-weight': 600 }).textContent = Math.round(v);
     }
+    // Where to drag a floor / ceiling in from, while it isn't set (nav.js does the dragging).
+    if (lane.key === 'pitch') for (const kind of ['ceiling', 'floor'].filter(k => g[k] == null))
+      svgAdd(svg, 'text', { x: W - G.r - 4, y: kind === 'ceiling' ? top + 11 : top + h - 4, 'text-anchor': 'end',
+        fill: 'var(--muted)', 'font-size': 10 }).textContent = `+ ${kind}`;
     svgAdd(svg, 'text', { x: G.l - 8, y: top + 13, 'text-anchor': 'end', fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 }).textContent = lane.title;
     const unitTxt = (v) => lane.unit === 'Hz' ? `${Math.round(v)} Hz` : lane.unit === 'dB' ? `${v.toFixed(0)} dB` : v.toFixed(2);
     svgAdd(svg, 'text', { x: G.l - 8, y: top + 27, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = unitTxt(hi);
@@ -804,7 +845,7 @@ function draw() {
       lane.series.forEach((s, si) => {
         let path = '', pen = false, last = null;
         for (const [t, v] of per[si]) {
-          if (v == null) { pen = false; continue; }
+          if (v == null || (set && (v < lo || v > hi))) { pen = false; continue; }   // off a set range: a gap
           path += (pen ? 'L' : 'M') + x(t).toFixed(1) + ' ' + yv(v).toFixed(1) + ' ';
           pen = true; last = [x(t), yv(v)];
         }
@@ -823,11 +864,20 @@ function draw() {
   svgAdd(svg, 'rect', { id: 'sel', x: 0, y: spkTop, width: 0, height: axisY - spkTop, fill: 'var(--accent)', opacity: 0.12, visibility: 'hidden' });
   svg.dataset.w = W;
   host.replaceChildren(svg);
-  geom = { W, x, t0, t1, plotW, spkBottom, layout };
+  geom = { W, x, t0, t1, plotW, spkBottom, layout, lanes: layout.lanes };
   $('zoomInfo').textContent = span >= dur - 0.01 ? 'Whole recording' : `${hms(t0)}–${hms(t1)} of ${hms(dur)}`;
   drawOverview();
   movePlayhead();
 }
+
+// The pitch lane under the pointer, for dragging the floor / ceiling there.
+Nav.pitchArea((ev) => {
+  const svg = $('tracks').querySelector('svg'), lane = geom?.lanes?.find(l => l.key === 'pitch');
+  if (!svg || !lane?.scale || !svg.contains(ev.target)) return null;
+  const r = svg.getBoundingClientRect(), k = r.width / geom.W || 1;
+  return { top: r.top + lane.y * k, bottom: r.top + (lane.y + lane.h) * k, left: r.left + G.l * k, right: r.left + (geom.W - G.r) * k,
+           lo: lane.scale.lo, hi: lane.scale.hi };
+});
 
 function niceStep(raw) {
   const steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
@@ -841,6 +891,8 @@ function drawOverview() {
   const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H);
   svgAdd(svg, 'text', { x: G.l - 8, y: 19, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 11 }).textContent = 'Whole recording';
   svgAdd(svg, 'rect', { x: G.l, y: 8, width: W - G.l - G.r, height: 14, fill: 'var(--lane)', rx: 3 });
+  for (const [a, b] of S.output.background || [])
+    svgAdd(svg, 'rect', { x: x(a), y: 13, width: Math.max(1, x(b) - x(a)), height: 4, fill: 'var(--muted)', opacity: 0.6 });
   for (const [a, b, id] of S.output.turns)
     svgAdd(svg, 'rect', { x: x(a), y: 10, width: Math.max(1, x(b) - x(a)), height: 10, fill: spkColor(id), opacity: .75 });
   svgAdd(svg, 'rect', { x: x(view[0]), y: 3, width: Math.max(4, x(view[1]) - x(view[0])), height: 24, rx: 4,
@@ -936,7 +988,8 @@ function showTip(ev, t) {
   const tip = $('tooltip'); tip.replaceChildren();
   tip.append(el('div', 't', tenths(t)));
   const who = S.output.turns.filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
-  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : 'Nobody speaking'));
+  const bg = (S.output.background || []).some(([a, b]) => a <= t && t < b);
+  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : bg ? 'Background voices (not a speaker)' : 'Nobody speaking'));
   for (const id of shown) {
     const d = voiceOf(id); if (!d) continue;
     const i = Math.min(d.time.length - 1, Math.max(0, Math.floor(t / d.duration * d.time.length)));
@@ -948,6 +1001,8 @@ function showTip(ev, t) {
     row('Mouth opening (F1)', hz(s.f1[i])); row('Tongue position (F2)', hz(s.f2[i])); row('Tract length (F3)', hz(s.f3[i]));
     row('Loudness', s.loudness[i] == null ? '—' : s.loudness[i].toFixed(3));
     row('Breathiness (HNR)', s.hnr[i] == null ? '—' : `${s.hnr[i].toFixed(1)} dB`);
+    const rp = Resonance.at(trendOf(id), t);
+    if (rp) row('Resonance trend', Resonance.describe(rp.pct));
     tip.append(g);
   }
   tip.hidden = false;

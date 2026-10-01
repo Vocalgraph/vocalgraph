@@ -280,10 +280,7 @@
       <label>Scale <select id="scale">
         <option value="fit">Fit what's on screen</option>
         <option value="session">Steady: whole session so far</option>
-        <option value="fixed">Steady: pitch range I set</option>
       </select></label>
-      <span id="fixedRange" hidden><label>Pitch from <input type="number" id="fixLo" min="20" max="1000" step="10"> to
-        <input type="number" id="fixHi" min="30" max="2000" step="10"> Hz</label></span>
       <span class="hint" id="scaleHint"></span>
     </div>
   </section>
@@ -308,12 +305,13 @@
 
   <!-- Card layout -->
   <section class="card" id="whoCard" hidden>
-    <h2>Who's speaking</h2>
-    <div id="timeline"></div>
-    <p class="note">Paler stretches are the newest speech, matched to the nearest voice. The full grouping re-runs every
-      few seconds and can relabel them. A new voice shows in grey, as "Not sure yet", until the grouping has kept it
-      apart from everyone else twice. Someone on an input of their own (a call app, their own microphone) is read off
-      that input, so when two people talk at once both are marked. Type over a name to rename someone.</p>
+    <h2>Speakers</h2>
+    <p class="note">Who is speaking shows as one strip under the pitch chart, in each speaker's colour, shared when
+      two talk at once. Paler stretches are the newest speech, matched to the nearest voice; the full grouping re-runs
+      every few seconds and can relabel them. A new voice shows in grey, as "Not sure yet", until it has taken a real
+      part of the talking (not only a word or two) and the grouping has kept it apart twice; a voice that then shrinks
+      back to almost nothing goes back to grey. Someone on an input of their own (a call app, their own microphone)
+      is read off that input. Type over a name to rename someone.</p>
     <div class="spk-list" id="spkList"></div>
   </section>
 
@@ -348,6 +346,7 @@
 </aside>
 </div>
 <div class="tooltip" id="tooltip" hidden></div>
+<script src="static/resonance.js"></script>
 <script src="static/voice.js"></script>
 <script src="static/nav.js"></script>
 <script>
@@ -359,17 +358,22 @@ const svgAdd = (parent, tag, attrs) => { const e = document.createElementNS(NS, 
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
                 set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
 const SPANS = { m1: 60, recent: 120, m5: 300 };     // seconds shown below the close-up
-const TL = { l: 120, r: 24, lane: 26 };            // same margins as the voice charts
 const SPK_COLORS = 8;
 const KEYS = ['f0', 'f1', 'f2', 'f3', 'loudness', 'hnr'];
 const PENDING = -2, NOBODY = -1;                   // frame labels besides speaker ids
+const BACK = -3;                                     // the background lane: voices much quieter than the speakers
 let S = null;                                      // latest /api/live/state
 let layout = Nav.layout();
 let span = ['m1', 'recent', 'm5', 'all'].includes(store.get('live.span')) ? store.get('live.span') : 'recent';
 let closeSpan = [5, 10, 20, 30].includes(+store.get('live.close')) ? +store.get('live.close') : 10;
 let closeWhat = ['pitch', 'res', 'loud', 'hnr'].includes(store.get('live.closeWhat')) ? store.get('live.closeWhat') : 'pitch';
-let scaleMode = ['fit', 'session', 'fixed'].includes(store.get('live.scale')) ? store.get('live.scale') : 'fit';
-let fixLo = +store.get('live.fixLo') || 60, fixHi = +store.get('live.fixHi') || 400;
+// The pitch range this page used to keep for itself ("Steady: pitch range I
+// set") is now the pitch chart range every page shares (Nav.axis).
+if (store.get('live.scale') === 'fixed') {
+  if (!Nav.axis()) { store.set('st.axisLo', store.get('live.fixLo') || '60'); store.set('st.axisHi', store.get('live.fixHi') || '400'); }
+  store.set('live.scale', 'session');
+}
+let scaleMode = ['fit', 'session'].includes(store.get('live.scale')) ? store.get('live.scale') : 'fit';
 let voiceWho = 'all', sessionId = null, freshJob = null;
 let shownT = [], shownTouched = false;             // speakers charted in the track layout
 
@@ -396,6 +400,7 @@ Nav.mount($('nav'), { mode: 'live', onLayout: (l) => { layout = l; applyLayout()
 Nav.guideControl($('guideSlot'));
 VoiceCharts.setGuide(Nav.guide());
 Nav.onGuide((g) => { VoiceCharts.setGuide(g); statsAt = 0; drawSoon(); });
+Nav.pitchArea(VoiceCharts.pitchArea);
 
 function applyLayout() {
   const track = layout === 'track', idle = !S || S.status === 'idle';
@@ -591,19 +596,14 @@ $('closeWhat').value = closeWhat;
 $('closeWhat').addEventListener('change', () => { closeWhat = $('closeWhat').value; store.set('live.closeWhat', closeWhat); drawSoon(); });
 // The value scale: fit what's on screen (moves as it scrolls), or steady.
 function syncScale() {
-  $('scale').value = scaleMode; $('fixedRange').hidden = scaleMode !== 'fixed';
-  $('fixLo').value = fixLo; $('fixHi').value = fixHi;
-  $('scaleHint').textContent = scaleMode === 'fit' ? '' : scaleMode === 'session'
-    ? 'Each chart keeps the range of the whole session so far, so it only widens when a voice goes further.'
-    : 'Pitch stays in this range; the other measures keep the range of the whole session so far.';
+  $('scale').value = scaleMode;
+  $('scaleHint').textContent = (scaleMode === 'fit' ? ''
+    : 'Each chart keeps the range of the whole session so far, so it only widens when a voice goes further.') +
+    (Nav.axis() ? ' Pitch starts or stops where set under Pitch chart.' : '');
 }
 syncScale();
 $('scale').addEventListener('change', () => { scaleMode = $('scale').value; store.set('live.scale', scaleMode); syncScale(); rangesAt = 0; vcShown = false; drawSoon(); });
-for (const id of ['fixLo', 'fixHi']) $(id).addEventListener('change', () => {
-  const lo = +$('fixLo').value, hi = +$('fixHi').value;
-  if (lo > 0 && hi > lo) { fixLo = lo; fixHi = hi; store.set('live.fixLo', lo); store.set('live.fixHi', hi); drawSoon(); }
-  syncScale();
-});
+Nav.onGuide(syncScale);
 $('voiceWho').addEventListener('change', () => { voiceWho = $('voiceWho').value; vcShown = false; statsAt = 0; drawSoon(); });
 
 // ---- state and voice frames -------------------------------------------------------------------
@@ -718,9 +718,51 @@ function view() {
 }
 // Speakers are numbered by the server, in the order they were confirmed.
 const num = (k) => { const s = (S.speakers || []).find(x => x.id === k); return s ? s.n - 1 : 0; };
-const spkColor = (k) => k === PENDING ? 'var(--pending)' : num(k) < SPK_COLORS ? `var(--series-${num(k) + 1})` : 'var(--series-other)';
-const spkName = (k) => k === PENDING ? 'Not sure yet' : (S.names && S.names[k]) || `Speaker ${num(k) + 1}`;
+const spkColor = (k) => k === PENDING ? 'var(--pending)' : k === BACK ? 'var(--muted)' : num(k) < SPK_COLORS ? `var(--series-${num(k) + 1})` : 'var(--series-other)';
+const spkName = (k) => k === PENDING ? 'Not sure yet' : k === BACK ? 'Background' : (S.names && S.names[k]) || `Speaker ${num(k) + 1}`;
 const speakers = () => (S.speakers || []).slice().sort((a, b) => a.n - b.n);
+// Every span on a lane, as [start, end, lane id].
+const laneSpans = () => [...S.turns, ...(S.unsure || []).map(([a, b]) => [a, b, PENDING]), ...(S.background || []).map(([a, b]) => [a, b, BACK])];
+// Who is speaking, as one strip: the stretches between any two span edges in
+// [t0, t1], each with everyone talking then, in speaker order (then "not sure
+// yet"); background only where nobody else is.
+function whoSegments(t0, t1) {
+  const spans = laneSpans().filter(([a, b]) => b > t0 && a < t1);
+  const edges = [...new Set(spans.flatMap(([a, b]) => [Math.max(a, t0), Math.min(b, t1)]))].sort((p, q) => p - q);
+  const rank = (k) => k === BACK ? 1e9 : k === PENDING ? 1e8 : num(k);
+  const out = [];
+  for (let i = 0; i + 1 < edges.length; i++) {
+    const a = edges[i], b = edges[i + 1], m = (a + b) / 2;
+    let ids = [...new Set(spans.filter(([p, q]) => p <= m && m < q).map(s => s[2]))];
+    if (!ids.length) continue;
+    if (ids.some(k => k !== BACK)) ids = ids.filter(k => k !== BACK);
+    out.push({ a, b, ids: ids.sort((p, q) => rank(p) - rank(q)) });
+  }
+  return out;
+}
+// ...drawn: the height shared between everyone talking at once, newest
+// (not yet regrouped) speech paler, background thinner and faint.
+function whoBars(t0, t1, mid, h, x, bar) {
+  for (const { a, b, ids } of whoSegments(t0, t1)) {
+    const xa = x(a), w = Math.max(1, x(b) - xa);
+    if (ids[0] === BACK) { bar(xa, mid - h / 4, w, h / 2, spkColor(BACK), 0.45); continue; }
+    const sh = h / ids.length, fresh = a >= S.grouped_until - 0.01;
+    ids.forEach((k, j) => bar(xa, mid - h / 2 + j * sh, w + 0.3, sh, spkColor(k), fresh ? 0.55 : 1));
+  }
+}
+const drawWho = (svg, { x, t0, t1, mid, h }) =>
+  whoBars(t0, t1, mid, h, x, (bx, by, bw, bh, fill, opacity) => svgAdd(svg, 'rect', { x: bx, y: by, width: bw, height: bh, fill, opacity }));
+// Every speaker's colour, for the legends under the strips.
+const whoLegend = () => [...speakers().map(s => s.id), PENDING, ...((S.background || []).length ? [BACK] : [])];
+
+// What the hover readout says about who is talking at t.
+function whoAt(t, pending) {
+  const who = (S.turns || []).filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
+  if (who.length) return who.join(' + ') + ' speaking';
+  if (pending) return 'Not sure yet who';
+  if ((S.background || []).some(([a, b]) => a <= t && t < b)) return 'Background voices (not a speaker)';
+  return 'Nobody speaking';
+}
 
 // Steady scales: each measure's range over the whole session so far (the
 // middle 99%, so one wild frame doesn't stretch it), refreshed now and then.
@@ -739,7 +781,6 @@ function refreshRanges() {
 }
 // A chart's value range: what's on screen, or steady.
 function scaled(name, lo, hi) {
-  if (scaleMode === 'fixed' && name === 'pitch') return [fixLo, fixHi];
   if (scaleMode !== 'fit' && ranges[name]) {
     const [a, b] = ranges[name];
     return isFinite(lo) ? [Math.min(a, lo), Math.max(b, hi)] : [a, b];
@@ -898,7 +939,7 @@ function draw(all) {
   if (!all && now - belowAt < 80) return;
   belowAt = now;
   if (layout === 'track') { drawTracks(); if (stats) renderTrackVoice(); }
-  else { drawTimeline(); drawCardVoice(stats); }
+  else drawCardVoice(stats);
 }
 function frameLoop() {
   if (S && running() && !document.hidden) draw(false);
@@ -916,8 +957,8 @@ const cssVar = (v) => { const m = /^var\((--[^)]+)\)$/.exec(v); return m ? getCo
 function drawClose() {
   const card = $('closeCard'); if (card.hidden) return;
   const canvas = $('closeCanvas'), W = $('close').clientWidth || 800;
-  const spk = speakers(), rows = spk.length + 1;              // each speaker, then "not sure yet"
-  const top = 4, chartTop = top + rows * (CL.lane + CL.gap) + 10, H = chartTop + CL.h + 22;
+  const spk = speakers();
+  const top = 4, chartTop = top + 4, whoMid = chartTop + CL.h + 22 + 12, H = whoMid + 14;   // the chart, its times, then who is speaking
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); canvas.style.height = H + 'px';
@@ -929,18 +970,14 @@ function drawClose() {
                 lane: cssVar('var(--lane)'), lava: cssVar('var(--lava)'), rec: cssVar('var(--rec)') };
   g.font = '600 12px system-ui, sans-serif'; g.textBaseline = 'middle';
   // speaker lanes
-  const rowY = new Map(); spk.forEach((s, i) => rowY.set(s.id, top + i * (CL.lane + CL.gap))); rowY.set(PENDING, top + spk.length * (CL.lane + CL.gap));
-  for (const [id, y] of rowY) {
-    g.fillStyle = col.lane; g.fillRect(CL.l, y, plotW, CL.lane);
-    g.fillStyle = id === PENDING ? col.muted : col.text; g.textAlign = 'right';
-    const nm = spkName(id); g.fillText(nm.length > 14 ? nm.slice(0, 13) + '…' : nm, CL.l - 8, y + CL.lane / 2);
-  }
+  // who is speaking, one strip under the chart
+  g.fillStyle = col.lane; g.fillRect(CL.l, whoMid - 9, plotW, 18);
+  g.fillStyle = col.text; g.textAlign = 'right'; g.fillText('Speaking', CL.l - 8, whoMid);
   g.save(); g.beginPath(); g.rect(CL.l, 0, plotW, H); g.clip();
-  const bar = (a, b, id) => { const y = rowY.get(id); if (y == null || b < t0 || a > t1) return;
-    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1)); g.fillStyle = cssVar(spkColor(id)); g.fillRect(xa, y + 2, Math.max(1.5, xb - xa), CL.lane - 4); };
-  for (const [a, b, k] of S.turns || []) bar(a, b, k);
-  for (const [a, b] of S.unsure || []) bar(a, b, PENDING);
+  whoBars(t0, t1, whoMid, 18, x, (bx, by, bw, bh, fill, opacity) => { g.globalAlpha = opacity; g.fillStyle = cssVar(fill); g.fillRect(bx, by, bw, bh); });
+  g.globalAlpha = 1;
   g.restore();
+  g.font = '600 12px system-ui, sans-serif';
   // value axis
   const series = CLOSE_SERIES[closeWhat], [title, unit] = CLOSE_TITLE[closeWhat];
   const i0 = lower(t0 - 0.05), i1 = lower(t1 + 0.05), lab = labels(i0, i1);
@@ -951,7 +988,9 @@ function drawClose() {
   if (!isFinite(lo)) { lo = closeWhat === 'pitch' ? 80 : 0; hi = closeWhat === 'pitch' ? 300 : 1; }
   if (scaleMode === 'fit') for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
   if (hi <= lo) hi = lo + 1;
-  if (scaleMode !== 'fixed' || closeWhat !== 'pitch') { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+  { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+  const set = closeWhat === 'pitch' && !!Nav.axis();          // a pitch chart end the person set: exactly there
+  if (set) [lo, hi] = Nav.withAxis(lo, hi);
   const yv = (v) => chartTop + (1 - (v - lo) / (hi - lo)) * CL.h;
   g.strokeStyle = col.grid; g.lineWidth = 1; g.strokeRect(CL.l + 0.5, chartTop + 0.5, plotW - 1, CL.h - 1);
   g.textAlign = 'right'; g.fillStyle = col.text; g.fillText(title, CL.l - 8, chartTop + 10);
@@ -965,10 +1004,11 @@ function drawClose() {
   // floor / ceiling
   g.save(); g.beginPath(); g.rect(CL.l, chartTop, plotW, CL.h); g.clip();
   for (const [kind, v] of marks) {
-    const y0 = yv(v);
+    const y0 = yv(Math.max(lo, Math.min(hi, v)));              // off the chart, the lava still shades what's past it
     g.globalAlpha = 0.07; g.fillStyle = col.lava;
     if (kind === 'floor') g.fillRect(CL.l, y0, plotW, chartTop + CL.h - y0); else g.fillRect(CL.l, chartTop, plotW, y0 - chartTop);
-    g.globalAlpha = 1; g.strokeStyle = col.lava; g.lineWidth = 1.5; g.setLineDash([5, 3]);
+    g.globalAlpha = 1; if (v < lo || v > hi) continue;
+    g.strokeStyle = col.lava; g.lineWidth = 1.5; g.setLineDash([5, 3]);
     g.beginPath(); g.moveTo(CL.l, y0); g.lineTo(W - CL.r, y0); g.stroke(); g.setLineDash([]);
   }
   // time grid
@@ -983,7 +1023,7 @@ function drawClose() {
     const lastAt = new Map(), paths = new Map();              // "label:src" -> time of its last point, path
     for (let i = i0; i < i1; i++) {
       const k = lab[i - i0], v = F.v[key][i];
-      if (k === NOBODY || v !== v) continue;
+      if (k === NOBODY || v !== v || (set && (v < lo || v > hi))) continue;   // off a set range: a gap
       const id = k + ':' + F.src[i], px = x(F.t[i]), py = yv(v), prev = lastAt.get(id);
       if (!paths.has(id)) paths.set(id, [k, new Path2D()]);
       const p = paths.get(id)[1];
@@ -997,17 +1037,23 @@ function drawClose() {
   // lava labels on the right, time labels below
   g.font = '600 10px system-ui, sans-serif'; g.textAlign = 'left';
   for (const [, v] of marks) { const y0 = yv(v); if (y0 >= chartTop && y0 <= chartTop + CL.h) { g.fillStyle = col.lava; g.fillText(Math.round(v), W - CL.r + 4, y0); } }
+  // where to drag a floor / ceiling in from, while it isn't set (nav.js does the dragging)
+  if (closeWhat === 'pitch') {
+    g.font = '10px system-ui, sans-serif'; g.fillStyle = col.muted; g.textAlign = 'right';
+    if (gd.ceiling == null) g.fillText('+ ceiling', W - CL.r - 4, chartTop + 9);
+    if (gd.floor == null) g.fillText('+ floor', W - CL.r - 4, chartTop + CL.h - 8);
+  }
   g.font = '11px system-ui, sans-serif'; g.fillStyle = col.muted; g.textAlign = 'center';
   for (const t of ticks) g.fillText(tenths(t), x(t), chartTop + CL.h + 12);
-  if (running()) { g.strokeStyle = col.rec; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x(t1) - 1, top); g.lineTo(x(t1) - 1, chartTop + CL.h); g.stroke(); }
+  if (running()) { g.strokeStyle = col.rec; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x(t1) - 1, top); g.lineTo(x(t1) - 1, whoMid + 9); g.stroke(); }
   if (closeHover != null && closeHover.t >= t0) {
-    g.strokeStyle = col.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x(closeHover.t), top); g.lineTo(x(closeHover.t), chartTop + CL.h); g.stroke();
+    g.strokeStyle = col.axis; g.lineWidth = 1; g.beginPath(); g.moveTo(x(closeHover.t), top); g.lineTo(x(closeHover.t), whoMid + 9); g.stroke();
   }
-  closeGeom = { W, t0, t1, plotW, top, bottom: chartTop + CL.h };
-  const leg = $('closeLegend'), want = [...spk.map(s => s.id), PENDING].map(id => `${id}|${spkName(id)}`).join(',') + closeWhat;
+  closeGeom = { W, t0, t1, plotW, top, bottom: whoMid + 9, chartTop, scale: { lo, hi } };
+  const leg = $('closeLegend'), want = whoLegend().map(id => `${id}|${spkName(id)}`).join(',') + closeWhat;
   if (leg.dataset.k !== want) {
     leg.dataset.k = want; leg.replaceChildren();
-    for (const id of [...spk.map(s => s.id), PENDING]) {
+    for (const id of whoLegend()) {
       const sp = el('span'); const i = el('i'); i.style.background = spkColor(id); sp.append(i, document.createTextNode(spkName(id))); leg.append(sp);
     }
     if (closeWhat === 'res') for (const [label, d] of [['F1 mouth opening', ''], ['F2 tongue position', '6 3'], ['F3 tract length', '1.5 3']]) {
@@ -1023,8 +1069,7 @@ function closeTip() {
   const tip = $('tooltip'), t = closeHover.t;
   tip.classList.add('tt'); tip.replaceChildren(el('div', 't', tenths(t)));
   const i0 = lower(t - 0.006), i1 = lower(t + 0.006), lab = labels(i0, i1);
-  const who = (S.turns || []).filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
-  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : (S.unsure || []).some(([a, b]) => a <= t && t < b) ? 'Not sure yet who' : 'Nobody speaking'));
+  tip.append(el('div', 'who', whoAt(t, (S.unsure || []).some(([a, b]) => a <= t && t < b))));
   const [key] = CLOSE_SERIES[closeWhat][0], [title, unit] = CLOSE_TITLE[closeWhat];
   for (let i = i0; i < i1; i++) {
     const k = lab[i - i0]; if (k === NOBODY) continue;
@@ -1072,35 +1117,6 @@ function summarise(want) {
 
 // ---- card layout ------------------------------------------------------------------------------
 
-function drawTimeline() {
-  const host = $('timeline'), W = host.clientWidth || 800, ids = [...speakers().map(s => s.id), PENDING];
-  const H = Math.max(1, ids.length) * TL.lane + 24, plotW = W - TL.l - TL.r;
-  const [t0, t1] = view(), x = (t) => TL.l + (t - t0) / (t1 - t0) * plotW;
-  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H);
-  ids.forEach((k, i) => {
-    const y = i * TL.lane;
-    svgAdd(svg, 'line', { x1: TL.l, x2: W - TL.r, y1: y + TL.lane / 2, y2: y + TL.lane / 2, stroke: 'var(--grid)' });
-    const name = spkName(k);
-    svgAdd(svg, 'text', { x: TL.l - 10, y: y + TL.lane / 2 + 4, 'text-anchor': 'end', 'font-size': 12, 'font-weight': k === PENDING ? 400 : 600,
-      fill: k === PENDING ? 'var(--muted)' : 'var(--text-primary)' }).textContent = name.length > 16 ? name.slice(0, 15) + '…' : name;
-  });
-  for (const [a, b, k] of [...S.turns, ...(S.unsure || []).map(([a, b]) => [a, b, PENDING])]) {
-    if (b < t0 || a > t1) continue;
-    const i = ids.indexOf(k); if (i < 0) continue;
-    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
-    svgAdd(svg, 'rect', { x: xa, y: i * TL.lane + 5, width: Math.max(1.5, xb - xa), height: TL.lane - 10, rx: 2,
-      fill: spkColor(k), opacity: a >= S.grouped_until - 0.01 ? 0.45 : 1 });
-  }
-  const base = Math.max(1, ids.length) * TL.lane;
-  svgAdd(svg, 'line', { x1: TL.l, x2: W - TL.r, y1: base, y2: base, stroke: 'var(--axis)' });
-  for (const t of VoiceCharts.ticks(t0, t1, plotW))
-    svgAdd(svg, 'text', { x: x(t), y: base + 16, 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }).textContent = t1 - t0 < 60 ? tenths(t) : fmtClock(t);
-  const nt = nowT();
-  if (running() && nt >= t0 && nt <= t1)
-    svgAdd(svg, 'line', { x1: x(nt), x2: x(nt), y1: 0, y2: base, stroke: 'var(--rec)', 'stroke-width': 1.5 });
-  host.replaceChildren(svg);
-}
-
 // The voice charts, from the frames here: the chosen speaker's frames (or
 // everyone's, including speech not matched yet) averaged into bins over the
 // part of the session shown.
@@ -1124,9 +1140,11 @@ function drawCardVoice(refreshStats) {
   $('voiceCharts').hidden = $('voiceMeta').hidden = empty;
   if (empty) return;
   const series = Object.fromEntries(KEYS.map(k => [k, Array.from(sums[k], (s, b) => cnt[k][b] ? s / cnt[k][b] : null)]));
-  const data = { duration: D, time: Array.from({ length: P }, (_, i) => D * (i + 0.5) / P), series, stats: vcStats || [], guideStats: false };
+  const data = { duration: D, time: Array.from({ length: P }, (_, i) => D * (i + 0.5) / P), series, stats: vcStats || [], guideStats: false,
+    resonance: voiceWho === 'all' && speakers().length > 1 ? 'Resonance trend: pick one speaker under Voice to see theirs.' : undefined };
   if (!vcShown || !VoiceCharts.update(data)) {
     VoiceCharts.show(data, { host: $('voiceCharts'), tip: $('tooltip'), meta: $('voiceMeta'), table: null, view,
+      strips: () => [{ label: 'Speaking', draw: drawWho }],
       label: (t, sp) => sp < 60 ? tenths(t) : fmtClock(t),
       range: (key, lo, hi) => [...scaled({ pitch: 'pitch', resonanceTime: 'res', loudness: 'loud', breathiness: 'hnr' }[key], lo, hi), scaleMode !== 'fit'] });
     vcShown = true;
@@ -1165,12 +1183,19 @@ function columns(key, i0, lab, want, t0, t1, n) {
 function drawTracks() {
   const host = $('tracks'), W = host.clientWidth || 800, [t0, t1] = view(), tspan = t1 - t0, plotW = W - G.l - G.r;
   const x = (t) => G.l + (t - t0) / tspan * plotW;
-  const spk = [...speakers(), { id: PENDING }], LANE = 16, LG = 4;
   const svg = document.createElementNS(NS, 'svg');
-  let y = 4; const rows = {};
-  for (const s of spk) { rows[s.id] = y; y += LANE + LG; }
-  const spkTop = 4; y += spk.length ? 12 : 0;
-  const lanes = LANES.map(l => { const o = { ...l, y }; y += l.h + 16; return o; });
+  let y = 4;
+  const spkTop = 4;
+  let strip = null, whoMid = null;
+  const lanes = LANES.map(l => {
+    const o = { ...l, y }; y += l.h + 16;
+    // right under pitch: who is speaking, then the resonance trend, one row per shown speaker
+    if (l.key === 'pitch') {
+      whoMid = y - 8 + 11; y += 22;
+      if (shownT.length) { strip = { y: y - 8, row: 22 }; y += shownT.length * 22 + 10; } else y += 10;
+    }
+    return o;
+  });
   const axisY = y - 6, H = axisY + 22;
   svg.setAttribute('width', W); svg.setAttribute('height', H);
 
@@ -1181,18 +1206,17 @@ function drawTracks() {
   }
   svgAdd(svg, 'line', { x1: G.l, x2: W - G.r, y1: axisY, y2: axisY, stroke: 'var(--axis)', 'stroke-width': 1 });
 
-  for (const s of spk) {
-    svgAdd(svg, 'rect', { x: G.l, y: rows[s.id], width: plotW, height: LANE, fill: 'var(--lane)', rx: 3 });
-    const nm = spkName(s.id);
-    svgAdd(svg, 'text', { x: G.l - 8, y: rows[s.id] + LANE / 2 + 4, 'text-anchor': 'end', fill: s.id === PENDING ? 'var(--muted)' : 'var(--text-primary)',
-      'font-size': 12, 'font-weight': s.id === PENDING ? 400 : 600 }).textContent = nm.length > 14 ? nm.slice(0, 13) + '…' : nm;
-  }
-  for (const [a, b, k] of [...S.turns, ...(S.unsure || []).map(([a, b]) => [a, b, PENDING])]) {
-    if (b < t0 || a > t1 || rows[k] == null) continue;
-    const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
-    svgAdd(svg, 'rect', { x: xa, y: rows[k] + 2, width: Math.max(1.5, xb - xa), height: LANE - 4, rx: 2, fill: spkColor(k),
-      stroke: 'var(--surface-1)', 'stroke-width': 1, opacity: a >= S.grouped_until - 0.01 ? 0.45 : (shownT.length && !shownT.includes(k) ? 0.35 : 1) });
-  }
+  svgAdd(svg, 'rect', { x: G.l, y: whoMid - 9, width: plotW, height: 18, fill: 'var(--lane)', rx: 3 });
+  svgAdd(svg, 'text', { x: G.l - 8, y: whoMid + 4, 'text-anchor': 'end', fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 }).textContent = 'Speaking';
+  drawWho(svg, { x, t0, t1, mid: whoMid, h: 18 });
+
+  if (strip) shownT.forEach((id, i) => {
+    const mid = strip.y + i * strip.row + strip.row / 2;
+    svgAdd(svg, 'rect', { x: G.l, y: mid - 9, width: plotW, height: 18, fill: 'var(--lane)', rx: 3 });
+    svgAdd(svg, 'text', { x: G.l - 8, y: mid + 4, 'text-anchor': 'end', fill: 'var(--text-secondary)', 'font-size': 11 })
+      .textContent = shownT.length > 1 ? `${spkName(id).slice(0, 10)} resonance` : 'Resonance';
+    Resonance.drawStrip(svg, trendOf(id), { x, t0, t1, mid, h: 18 });
+  });
 
   // Voice lanes: each shown speaker in their colour, and speech not matched to
   // anyone yet in grey, so the newest words show straight away.
@@ -1211,17 +1235,23 @@ function drawTracks() {
     if (!isFinite(lo)) { lo = lane.key === 'pitch' ? 80 : 0; hi = lane.key === 'pitch' ? 300 : 1; }
     if (scaleMode === 'fit') for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
     if (hi <= lo) hi = lo + 1;
-    if (scaleMode !== 'fixed' || lane.key !== 'pitch') { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+    { const pad = (hi - lo) * 0.06; lo -= pad; hi += pad; }
+    const set = lane.key === 'pitch' && !!Nav.axis();          // a pitch chart end the person set: exactly there
+    if (set) [lo, hi] = Nav.withAxis(lo, hi);
     const top = lane.y, h = lane.h, yv = (v) => top + (1 - (v - lo) / (hi - lo)) * h;
     lane.scale = { lo, hi };
     svgAdd(svg, 'rect', { x: G.l, y: top, width: plotW, height: h, fill: 'none', stroke: 'var(--grid)' });
     for (const [kind, v] of marks) {
-      if (v < lo || v > hi) continue;
-      const y0 = yv(v), ry = kind === 'floor' ? y0 : top, rh = kind === 'floor' ? top + h - y0 : y0 - top;
+      const y0 = yv(Math.max(lo, Math.min(hi, v))), ry = kind === 'floor' ? y0 : top, rh = kind === 'floor' ? top + h - y0 : y0 - top;
       svgAdd(svg, 'rect', { x: G.l, y: ry, width: plotW, height: Math.max(0, rh), fill: 'var(--lava)', opacity: 0.07 });
+      if (v < lo || v > hi) continue;
       svgAdd(svg, 'line', { x1: G.l, x2: W - G.r, y1: y0, y2: y0, stroke: 'var(--lava)', 'stroke-width': 1.5, 'stroke-dasharray': '5 3' });
       svgAdd(svg, 'text', { x: W - G.r + 4, y: y0 + 4, fill: 'var(--lava)', 'font-size': 10, 'font-weight': 600 }).textContent = Math.round(v);
     }
+    // Where to drag a floor / ceiling in from, while it isn't set (nav.js does the dragging).
+    if (lane.key === 'pitch') for (const kind of ['ceiling', 'floor'].filter(k => g[k] == null))
+      svgAdd(svg, 'text', { x: W - G.r - 4, y: kind === 'ceiling' ? top + 11 : top + h - 4, 'text-anchor': 'end',
+        fill: 'var(--muted)', 'font-size': 10 }).textContent = `+ ${kind}`;
     svgAdd(svg, 'text', { x: G.l - 8, y: top + 13, 'text-anchor': 'end', fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 }).textContent = lane.title;
     const unitTxt = (v) => lane.unit === 'Hz' ? `${Math.round(v)} Hz` : lane.unit === 'dB' ? `${v.toFixed(0)} dB` : v.toFixed(2);
     svgAdd(svg, 'text', { x: G.l - 8, y: top + 27, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = unitTxt(hi);
@@ -1236,7 +1266,7 @@ function drawTracks() {
       let d = '', pen = false;
       per[si].forEach((v, c) => {
         const px = x((c0 + c + 0.5) * cw);
-        if (v == null || px < G.l || px > W - G.r) { pen = false; return; }
+        if (v == null || px < G.l || px > W - G.r || (set && (v < lo || v > hi))) { pen = false; return; }
         d += (pen ? 'L' : 'M') + px.toFixed(1) + ' ' + Math.max(top, Math.min(top + h, yv(v))).toFixed(1) + ' '; pen = true;
       });
       if (d) svgAdd(svg, 'path', { d, fill: 'none', stroke: spkColor(id), 'stroke-width': 1.75, 'stroke-linejoin': 'round',
@@ -1249,12 +1279,46 @@ function drawTracks() {
   svgAdd(svg, 'line', { id: 'hover', x1: 0, x2: 0, y1: spkTop, y2: axisY, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' });
   svg.dataset.w = W;
   host.replaceChildren(svg);
-  geom = { W, x, t0, t1, plotW };
+  geom = { W, x, t0, t1, plotW, lanes };
   const leg = $('trackLegend'); leg.replaceChildren();
-  for (const id of who) {
+  for (const id of whoLegend()) {
     const sp = el('span'); const i = el('i'); i.style.background = spkColor(id); sp.append(i, document.createTextNode(spkName(id))); leg.append(sp);
   }
   if (hoverT != null) hoverAt(hoverT, lastHoverEv);
+}
+
+// The pitch lane under the pointer, for dragging the floor / ceiling there.
+Nav.pitchArea((ev) => {
+  const svg = $('tracks').querySelector('svg'), lane = geom?.lanes?.find(l => l.key === 'pitch');
+  if (!svg || !lane?.scale || !svg.contains(ev.target)) return null;
+  const r = svg.getBoundingClientRect(), k = r.width / geom.W || 1;
+  return { top: r.top + lane.y * k, bottom: r.top + (lane.y + lane.h) * k, left: r.left + G.l * k, right: r.left + (geom.W - G.r) * k,
+           lo: lane.scale.lo, hi: lane.scale.hi };
+});
+// ...and the close-up, while it shows pitch.
+Nav.pitchArea((ev) => {
+  const c = $('closeCanvas');
+  if (!closeGeom?.scale || closeWhat !== 'pitch' || ev.target !== c) return null;
+  const r = c.getBoundingClientRect(), k = r.width / closeGeom.W || 1;
+  return { top: r.top + closeGeom.chartTop * k, bottom: r.top + (closeGeom.chartTop + CL.h) * k, left: r.left + CL.l * k,
+           right: r.left + (closeGeom.W - CL.r) * k, lo: closeGeom.scale.lo, hi: closeGeom.scale.hi };
+});
+
+// A shown speaker's resonance trend (resonance.js), from the frames put to them;
+// worked out again at most every couple of seconds while the session runs.
+const RT = new Map();
+function trendOf(id) {
+  const c = RT.get(id);
+  if (c && (Date.now() - c.at < 2000 || (!running() && c.n === F.n))) return c.tr;
+  const lab = labels(0, F.n), time = [], series = { f0: [], f1: [], f2: [], f3: [] };
+  for (let i = 0; i < F.n; i++) {
+    if (lab[i] !== id) continue;
+    time.push(F.t[i]);
+    for (const k of ['f0', 'f1', 'f2', 'f3']) series[k].push(F.v[k][i]);
+  }
+  const tr = Resonance.trend({ duration: Math.max(nowT(), S.duration, 0.1), time, series }, { dt: 0.01 });
+  RT.set(id, { tr, at: Date.now(), n: F.n });
+  return tr;
 }
 
 function renderTrackVoice() {
@@ -1267,6 +1331,8 @@ function renderTrackVoice() {
     const tiles = el('div', 'tiles');
     for (const [k, v] of st) { const t = el('div', 'tile'); t.append(el('div', 'k', k), el('div', 'v', v)); tiles.append(t); }
     host.append(tiles);
+    const tr = trendOf(id);
+    host.append(el('p', 'empty', tr?.summary ? tr.summary.text : tr ? 'Resonance trend: on the strip under Pitch, darker where it is darker and thicker.' : 'Resonance trend: not enough measured speech yet.'));
   }
 }
 
@@ -1286,8 +1352,7 @@ function hoverAt(t, ev) {
   const i = Math.min(F.n - 1, lower(t - 0.005));
   const near = i >= 0 && F.n && Math.abs(F.t[i] - t) < 0.06;
   const k = near ? labels(i, i + 1)[0] : NOBODY;
-  const who = (S.turns || []).filter(([a, b]) => a <= t && t < b).map(([, , id]) => spkName(id));
-  tip.append(el('div', 'who', who.length ? who.join(' + ') + ' speaking' : k === PENDING ? 'Not sure yet who' : 'Nobody speaking'));
+  tip.append(el('div', 'who', whoAt(t, k === PENDING)));
   if (near && k !== NOBODY) {
     const row = (name, v) => { const r = el('div', 'row'); r.append(el('span', null, name), el('b', null, v)); tip.append(r); };
     const hz = (v) => v === v ? `${Math.round(v)} Hz` : '—';
@@ -1295,6 +1360,8 @@ function hoverAt(t, ev) {
     row('Tract length (F3)', hz(F.v.f3[i]));
     row('Loudness', F.v.loudness[i] === F.v.loudness[i] ? F.v.loudness[i].toFixed(3) : '—');
     row('Breathiness (HNR)', F.v.hnr[i] === F.v.hnr[i] ? `${F.v.hnr[i].toFixed(1)} dB` : '—');
+    const rp = k >= 0 && RT.has(k) && Resonance.at(RT.get(k).tr, t);
+    if (rp) row('Resonance trend', Resonance.describe(rp.pct));
   }
   tip.hidden = false;
   const w = tip.offsetWidth, h = tip.offsetHeight;

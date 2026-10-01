@@ -8,6 +8,8 @@
 //             few seconds; ids kept stable by shared speaking time; a new
 //             voice only becomes a speaker once confirmed (CONFIRM_TALK, twice
 //             running); anyone on an input of their own read off its track;
+//             voices much quieter than the speakers (a TV, a call in another
+//             room) set apart as background, as the library does;
 //   voice     openSMILE on each new 0.1 s with 0.5 s before and 0.1 s after;
 //             with several inputs, on each input on its own.
 import * as E from '../engine/index.js';
@@ -16,8 +18,13 @@ const S = E.speakers, src = E.sources, V = E.voice;
 const RATE = S.RATE;
 const VOICE_BLOCK = 0.1, VOICE_BEFORE = 0.5, VOICE_AFTER = 0.1;
 const REGROUP_EVERY = 4.0;
-const CONFIRM_TALK = 2.0;
+const CONFIRM_TALK = 2.0, CONFIRM_SHARE = 0.05;
+const DROP_TALK = 3.0, DROP_SHARE = 0.03, DROP_AFTER = 2;
 const LEVEL = Math.trunc(src.HOP * RATE);
+const MIX_HOP = RATE / S.LEVELS_PER_S;
+// The background's id among the voiceprints, so the newest seconds of a
+// background voice are put to it before the next grouping.
+const BG = 1000000;
 
 // A growable typed array.
 class Grow {
@@ -66,11 +73,13 @@ export class Session {
     this.x = new Grow(Float32Array);                               // the mix, 16 kHz, rounded to 16-bit
     this.tx = Array.from({ length: tracks }, () => new Grow(Int16Array));
     this.lev = Array.from({ length: tracks }, () => new Grow(Float64Array, 3000));
+    this.mixLev = new Grow(Float32Array, 6000);                    // the mix's loudness, for background
+    this.background = [];                                          // [[start, end]] from the latest grouping
     this.thr = null; this.homes = new Map(); this.own = new Map();
     this.binary = []; this.emb = [];                               // per window: Uint8Array(589*3), Float32Array(3*256)
     this.cent = new Map(); this.nextPid = 0; this.online = [];
     this.grouped = []; this.groupedUntil = 0; this.regroup = { at: null, took: null };
-    this.confirmed = new Map(); this.seen = new Map();
+    this.confirmed = new Map(); this.seen = new Map(); this.weak = new Map(); this.order = 0;
     this.vt = new Grow(Float64Array, 6000);
     this.vraw = Object.fromEntries(V.KEYS.map(k => [k, new Grow(Float64Array, 6000)]));
     this.vsrc = new Grow(Int8Array, 6000); this.vprim = new Grow(Uint8Array, 6000);
@@ -156,7 +165,7 @@ export class Session {
       d = Math.sqrt(d);
       if (d < dist) { dist = d; pid = id; }
     }
-    const full = this.numSpeakers !== null && this.cent.size >= this.numSpeakers;
+    const full = this.numSpeakers !== null && this.cent.size - (this.cent.has(BG) ? 1 : 0) >= this.numSpeakers;
     if (pid === null || (dist > S.THRESHOLD && !full)) { pid = this.nextPid++; this.cent.set(pid, [new Float64Array(e.length), 0]); }
     const slot = this.cent.get(pid);
     for (let i = 0; i < e.length; i++) slot[0][i] += e[i];
@@ -182,13 +191,17 @@ export class Session {
     const binary = new Uint8Array(chunks * S.NUM_FRAMES * S.LOCAL), emb = new Float32Array(chunks * S.LOCAL * S.DIM);
     this.binary.forEach((b, c) => binary.set(b, c * b.length));
     this.emb.forEach((e, c) => emb.set(e, c * e.length));
-    const shown = this.labelled(), until = ((chunks - 1) * S.STEP + S.WINDOW) / RATE;
+    const shown = this.labelled().filter(t => t[2] !== BG), until = ((chunks - 1) * S.STEP + S.WINDOW) / RATE;
     const t0 = performance.now();
     const sums = new Float32Array(chunks * S.NUM_FRAMES);
     for (let i = 0; i < sums.length; i++) sums[i] = binary[i * 3] + binary[i * 3 + 1] + binary[i * 3 + 2];
     const count = Int16Array.from(S.aggregate(sums, chunks, 1, false), v => S.rint(v));
-    let turns = count.some(v => v > 0) ? E.assign({ binary, count, embeddings: emb, chunks }, this.numSpeakers) : [];
-    const labelCent = turns.length ? this.centroids(binary, emb, chunks, turns) : new Map();
+    const full = Math.floor(this.n / MIX_HOP);
+    if (full > this.mixLev.n) this.mixLev.push(S.levels(this.x.view(this.mixLev.n * MIX_HOP, full * MIX_HOP)));
+    const g = count.some(v => v > 0) ? E.group({ binary, count, embeddings: emb, chunks, level: this.mixLev.view() }, this.numSpeakers)
+                                     : { turns: [], background: [] };
+    let turns = g.turns;
+    const labelCent = turns.length ? this.centroids(binary, emb, chunks, [...turns, ...g.background.map(([a, b]) => [a, b, BG])]) : new Map();
     let homes = new Map(), own = new Map(), thr = null;
     if (this.tracks && turns.length) {
       const lev = this.levels();
@@ -214,7 +227,8 @@ export class Session {
     for (const k of newIds) if (!mapping.has(k)) mapping.set(k, this.nextPid++);
     this.grouped = turns.map(([a, b, k]) => [a, b, mapping.get(k)]);
     this.groupedUntil = until;
-    this.cent = new Map([...labelCent].filter(([k]) => mapping.has(k)).map(([k, v]) => [mapping.get(k), v]));
+    this.cent = new Map([...labelCent].filter(([k]) => mapping.has(k) || k === BG).map(([k, v]) => [k === BG ? BG : mapping.get(k), v]));
+    this.background = g.background;
     this.homes = new Map([...homes].filter(([k]) => mapping.has(k)).map(([k, h]) => [mapping.get(k), h]));
     this.own = new Map([...own].filter(([, k]) => mapping.has(k)).map(([i, k]) => [i, mapping.get(k)]));
     this.thr = thr;
@@ -252,19 +266,32 @@ export class Session {
   }
 
   // A voice becomes a speaker once the grouping has kept it apart twice
-  // running, with CONFIRM_TALK of speech and one turn of MIN_TURN; the first
-  // speaker, and anyone on an input of their own, need it once.
+  // running, with CONFIRM_TALK of speech, CONFIRM_SHARE of all the talk so far
+  // and one turn of MIN_TURN; the first speaker, and anyone on an input of
+  // their own, need it once. A speaker who then shrinks below DROP_TALK or
+  // DROP_SHARE for DROP_AFTER groupings running is a speaker no more (a
+  // passing voice, or one the grouping has since folded into someone else):
+  // their speech goes back to "not sure yet". Not the one who talks most, nor
+  // anyone on an input of their own.
   confirm() {
     const talk = new Map(), longest = new Map();
     for (const [a, b, k] of E.join(this.grouped)) { talk.set(k, (talk.get(k) || 0) + b - a); longest.set(k, Math.max(longest.get(k) || 0, b - a)); }
-    const present = [...talk.keys()];
+    const present = [...talk.keys()], total = [...talk.values()].reduce((s, v) => s + v, 0);
     this.seen = new Map(present.map(k => [k, (this.seen.get(k) || 0) + 1]));
-    let anyone = present.some(k => this.confirmed.has(k));
     const own = new Set(this.own.values());
+    const most = present.reduce((m, k) => (m == null || talk.get(k) > talk.get(m) ? k : m), null);
+    for (const k of [...this.confirmed.keys()]) {
+      const t = talk.get(k) || 0;
+      if (own.has(k) || k === most || (t >= DROP_TALK && t >= DROP_SHARE * total)) { this.weak.delete(k); continue; }
+      this.weak.set(k, (this.weak.get(k) || 0) + 1);
+      if (this.weak.get(k) >= DROP_AFTER) { this.confirmed.delete(k); this.weak.delete(k); }
+    }
+    let anyone = present.some(k => this.confirmed.has(k));
     const firstAt = (k) => Math.min(...this.grouped.filter(t => t[2] === k).map(t => t[0]));
     for (const k of present.sort((a, b) => firstAt(a) - firstAt(b))) {
-      if (this.confirmed.has(k) || talk.get(k) < CONFIRM_TALK || longest.get(k) < S.MIN_TURN) continue;
-      if (this.seen.get(k) >= 2 || !anyone || own.has(k)) { this.confirmed.set(k, this.confirmed.size); anyone = true; }
+      if (this.confirmed.has(k) || longest.get(k) < S.MIN_TURN) continue;
+      if (!own.has(k) && (talk.get(k) < CONFIRM_TALK || (anyone && talk.get(k) < CONFIRM_SHARE * total))) continue;
+      if (this.seen.get(k) >= 2 || !anyone || own.has(k)) { this.confirmed.set(k, this.order++); anyone = true; }
     }
   }
 
@@ -316,10 +343,12 @@ export class Session {
     return E.join([...this.grouped, ...tail]);
   }
 
-  // (turns of confirmed speakers, spans of speech not yet put to anyone)
+  // (turns of confirmed speakers, spans of speech not yet put to anyone,
+  // spans of background voices)
   display() {
-    const turns = [], unsureT = [];
-    for (const t of this.labelled()) (this.confirmed.has(t[2]) ? turns : unsureT).push(t);
+    const turns = [], unsureT = [], backT = this.background.map(([a, b]) => [a, b, 0]);
+    for (const t of this.labelled()) (t[2] === BG ? backT : this.confirmed.has(t[2]) ? turns : unsureT).push(t);
+    const background = E.join(backT.map(([a, b]) => [a, b, 0]), 0.0).map(([a, b]) => [a, b]);
     let unsure = E.join(unsureT.map(([a, b]) => [a, b, 0]), 0.0).map(([a, b]) => [a, b]);
     const own = new Set(this.own.values());
     const sure = turns.filter(t => own.has(t[2])).map(([a, b]) => [a, b]).sort((p, q) => p[0] - q[0] || p[1] - q[1]);
@@ -336,11 +365,11 @@ export class Session {
       }
       unsure = left.filter(([a, b]) => b - a > 0.05);
     }
-    return { turns, unsure };
+    return { turns, unsure, background };
   }
 
   state(extra = {}) {
-    const { turns, unsure } = this.display(), duration = this.n / RATE;
+    const { turns, unsure, background } = this.display(), duration = this.n / RATE;
     let level = null;
     if (this.n) { const tail = this.x.view(Math.max(0, this.n - RATE / 10)); let s = 0; for (const v of tail) s += v * v; level = Math.round(10 * Math.log10(s / tail.length + 1e-12) * 10) / 10; }
     const doneTo = this.binary.length ? ((this.binary.length - 1) * S.STEP + S.WINDOW) / RATE : 0;
@@ -358,6 +387,7 @@ export class Session {
         track: this.homes.has(k) && this.homes.get(k) < this.names.length ? this.names[this.homes.get(k)] : null })),
       turns: turns.map(([a, b, k]) => [r3(a), r3(b), k]),
       unsure: unsure.map(([a, b]) => [r3(a), r3(b)]),
+      background: background.map(([a, b]) => [r3(a), r3(b)]),
       inputs: this.tracks ? this.names : [],
     };
   }
