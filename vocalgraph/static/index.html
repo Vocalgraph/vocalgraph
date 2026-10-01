@@ -588,6 +588,9 @@ function renderSpeakers() {
   const total = spk.reduce((n, s) => n + s.talk, 0) || 1;
   $('spkSummary').textContent = spk.length === 0 ? 'No speech was found.'
     : spk.length === 1 ? 'One speaker found.' : `${spk.length} speakers found. Rename them below.`;
+  // Quiet voices behind the speakers (the browser version tells them apart)
+  if (S.background >= 0.5) $('spkSummary').textContent += ` Background voices, much quieter than the speakers ` +
+    `(a TV, a call in another room): ${hms(S.background)}, shown as Background and not counted as a speaker.`;
   const sel = $('numSpeakers');
   if (sel.options.length === 1) for (let i = 1; i <= 8; i++) sel.append(new Option(String(i), String(i)));
   sel.value = S.num_speakers ? String(S.num_speakers) : '';
@@ -657,8 +660,9 @@ function xAt(t, W) { const [t0, t1] = viewNow(); return TL.l + (t - t0) / (t1 - 
 function drawTimeline() {
   const host = $('timeline');
   if (!S?.output || host.offsetParent === null) return;
-  const spk = S.speakers || [];
-  const W = host.clientWidth || 800, H = spk.length * (TL.lane + TL.gap) + TL.axis;
+  const spk = S.speakers || [], back = S.output.background || [];
+  const lanes = spk.length + (back.length ? 1 : 0);
+  const W = host.clientWidth || 800, H = lanes * (TL.lane + TL.gap) + TL.axis;
   const [t0, t1] = viewNow(), span = t1 - t0, x = (t) => xAt(t, W);
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('width', W); svg.setAttribute('height', H);
@@ -672,6 +676,17 @@ function drawTimeline() {
       fill: 'var(--text-primary)', 'font-size': 12, 'font-weight': 600 });
     label.textContent = spkName(s.id).length > 16 ? spkName(s.id).slice(0, 15) + '…' : spkName(s.id);
   });
+  if (back.length) {                       // the background's own lane, below the speakers
+    const y = laneY(spk.length);
+    add('rect', { x: TL.l, y, width: W - TL.l - TL.r, height: TL.lane, fill: 'var(--grid)', opacity: 0.2, rx: 4 });
+    add('text', { x: TL.l - 10, y: y + TL.lane / 2 + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 12 }).textContent = 'Background';
+    for (const [a, b] of back) {
+      if (b < t0 || a > t1) continue;
+      const xa = x(Math.max(a, t0)), xb = x(Math.min(b, t1));
+      add('rect', { class: 'turn', x: xa, y: y + 6, width: Math.max(2, xb - xa), height: TL.lane - 12, rx: 3,
+        fill: 'var(--muted)', opacity: 0.55, 'data-a': a, 'data-b': b, 'data-bg': 1 });
+    }
+  }
   const row = Object.fromEntries(spk.map((s, i) => [s.id, i]));
   for (const [a, b, id] of S.output.turns) {
     if (b < t0 || a > t1) continue;
@@ -726,7 +741,8 @@ $('timeline').addEventListener('pointermove', (ev) => {
   if (!mark || drag?.moved) { tip.hidden = true; return; }
   const a = +mark.dataset.a, b = +mark.dataset.b, id = +mark.dataset.id;
   tip.replaceChildren();
-  const n = document.createElement('div'); n.className = 'name'; n.textContent = spkName(id);
+  const n = document.createElement('div'); n.className = 'name';
+  n.textContent = mark.dataset.bg ? 'Background: quieter voices, not a speaker' : spkName(id);
   const t = document.createElement('div'); t.className = 't';
   t.textContent = `${tenths(a)} – ${tenths(b)} (${(b - a).toFixed(1)} s) · click to play`;
   tip.append(n, t); tip.hidden = false;
@@ -768,6 +784,8 @@ function drawOverview() {
   const add = (tag, attrs) => { const el = document.createElementNS(NS, tag);
     for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); svg.append(el); return el; };
   add('rect', { x: OV.l, y: 8, width: W - OV.l - OV.r, height: 14, fill: 'var(--grid)', opacity: 0.5, rx: 3 });
+  for (const [a, b] of S.output.background || [])
+    add('rect', { x: x(a), y: 13, width: Math.max(1, x(b) - x(a)), height: 4, fill: 'var(--muted)', opacity: 0.6 });
   for (const [a, b, id] of S.output.turns)
     add('rect', { x: x(a), y: 10, width: Math.max(1, x(b) - x(a)), height: 10, fill: spkColor(id), opacity: 0.7 });
   add('rect', { x: x(t0), y: 2, width: Math.max(6, x(t1) - x(t0)), height: 26, rx: 4,

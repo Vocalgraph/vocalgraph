@@ -50,7 +50,7 @@ async function prep(job) {
 // --- persistence ----------------------------------------------------------------
 
 const SAVED = ['id', 'name', 'created', 'sha256', 'input_file', 'duration', 'threshold', 'speech_only', 'num_speakers',
-  'names', 'anchors', 'turns', 'rev', 'prep_segments', 'output', 'tracks', 'homes', 'track_lags', 'engine'];
+  'names', 'anchors', 'turns', 'background', 'rev', 'prep_segments', 'output', 'tracks', 'homes', 'track_lags', 'engine'];
 
 async function save(job) {
   const meta = Object.fromEntries(SAVED.map(k => [k, job[k] ?? null]));
@@ -114,10 +114,13 @@ async function prepare(job) {
 }
 
 async function assign(job) {
-  const turns = E.assign(await prep(job), job.num_speakers ?? null);
+  // background: quiet voices behind the speakers (a TV, a call in another
+  // room), kept as spans of the recording, never as a speaker
+  const { turns, background } = E.group(await prep(job), job.num_speakers ?? null);
   const tl = new E.Timeline(job.prep_segments);
   let out = [];
   for (const [s, e, k] of turns) for (const [a, b] of tl.toSource(s, e)) out.push([a, b, k]);
+  job.background = background.flatMap(([s, e]) => tl.toSource(s, e).map(([a, b]) => [a, b]));
   let homes = {};
   const act = await trackActivity(job);
   if (act) {
@@ -214,6 +217,9 @@ async function place(job) {
   }
   placed.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
   job.output.turns = placed.map(([a, b, k]) => [round3(a), round3(b), k]);
+  const back = [];
+  for (const [s, e] of [...(job.background || [])].sort((p, q) => p[0] - q[0])) for (const [a, b] of tl.fromSource(s, e)) back.push([round3(a), round3(b)]);
+  job.output.background = back;
 }
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -274,7 +280,8 @@ async function summary(job) {
   const homes = job.homes || {}, tracks = job.tracks || [];
   out.speakers = [...talk.keys()].sort((p1, p2) => p1 - p2).map(k => ({ id: k, talk: talk.get(k), turns: count.get(k) || 0,
     track: homes[k] != null && homes[k] < tracks.length ? tracks[homes[k]] : null }));
-  if (o.key) out.output = { version: o.key, duration: o.duration, turns: o.turns || [] };
+  if (o.key) out.output = { version: o.key, duration: o.duration, turns: o.turns || [], background: o.background || [] };
+  out.background = (job.background || []).reduce((t, [s, e]) => t + e - s, 0);
   return out;
 }
 

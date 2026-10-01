@@ -408,7 +408,8 @@ export class Session {
     const count = Int16Array.from(S.aggregate(sums, chunks, 1, false), v => S.rint(v));
     const vf = this.voiceFrames();
     vf.t = vf.t.map(v => v + offset);
-    return { prep: { binary, count, embeddings, chunks }, frames: vf };
+    // level: the mix's loudness, so the library can tell background voices apart
+    return { prep: { binary, count, embeddings, chunks, level: S.levels(this.x.view()) }, frames: vf };
   }
 }
 

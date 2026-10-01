@@ -11,6 +11,7 @@ The files are made from personal recordings: keep them out of the repository.
 
   <id>/binary.u8 count.i16 emb.f32 meta.json   prepare() outputs (speakers.npz)
   <id>/assign.json                              assign(prep, n), n in None,1..4
+  <id>/level.f32 group.json                     levels() of the analysed audio; group(prep + level, n)
   <id>/dendro.f64 fcluster.i32 centroids.f32 hard.i8   _cluster internals
   prepare/...                                   model I/O of one prepare() run
   sources/...                                   decoded streams + sources.py results
@@ -29,7 +30,7 @@ sys.path.insert(0, ROOT)
 
 from vocalgraph import core, sources, speakers  # noqa: E402
 from vocalgraph.fbank import fbank  # noqa: E402
-from vocalgraph.timeline import Timeline  # noqa: E402
+from vocalgraph.timeline import Timeline, concat  # noqa: E402
 
 LIBRARY = os.environ.get("VOCALGRAPH_LIBRARY") or os.path.join(ROOT, "library")
 OUT = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("VOCALGRAPH_SPEAKER_REFS")
@@ -71,6 +72,21 @@ def library_refs():
         save(os.path.join(d, "emb.f32"), prep["embeddings"], np.float32)
         dump(os.path.join(d, "assign.json"),
              {str(n): turns_json(speakers.assign(prep, n)) for n in (None, 1, 2, 3, 4)})
+        # Loudness of the audio the speaker step analysed (the kept stretches
+        # joined, or the whole of a live recording), and group() with it.
+        job = load_job(rid)
+        x = core.decode(os.path.join(LIBRARY, rid, job["input_file"]))
+        segs = job.get("prep_segments")
+        level = speakers.levels(concat(x, segs) if segs else x)
+        frames_s = prep["count"].shape[0] * speakers.FRAME_STEP
+        if abs(frames_s - len(level) / speakers.LEVELS_PER_S) > 2:
+            print(rid, f"level covers {len(level) / speakers.LEVELS_PER_S:.1f} s, the speaker step {frames_s:.1f} s: skipped")
+        else:
+            save(os.path.join(d, "level.f32"), level, np.float32)
+            with_level = dict(prep, level=level)
+            dump(os.path.join(d, "group.json"),
+                 {str(n): {"turns": turns_json(g[0]), "background": g[1]}
+                  for n in (None, 1, 2, 3, 4) for g in [speakers.group(with_level, n)]})
         # the clustering's internals, for a direct comparison
         binary = prep["binary"].astype(np.float32)
         emb = prep["embeddings"]
@@ -129,6 +145,9 @@ def prepare_refs():
     save(os.path.join(d, "emb_fbank.f32"), fb, np.float32)
     save(os.path.join(d, "emb_weights.f32"), w, np.float32)
     save(os.path.join(d, "emb_out.f32"), emb_out, np.float32)
+    # prepare.js adds the loudness of the samples it analyses (rounded to 16-bit)
+    save(os.path.join(d, "level.f32"),
+         speakers.levels((np.clip(np.round(x * 32768.0), -32768, 32767) / 32768.0).astype(np.float32)), np.float32)
     save(os.path.join(d, "binary.u8"), prep["binary"], np.uint8)
     save(os.path.join(d, "count.i16"), prep["count"], np.int16)
     save(os.path.join(d, "emb.f32"), prep["embeddings"], np.float32)

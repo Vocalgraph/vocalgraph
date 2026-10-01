@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { assign, prepare, cluster, NUM_FRAMES, LOCAL, DIM, THRESHOLD } from '../speakers.js';
+import { assign, group, prepare, cluster, NUM_FRAMES, LOCAL, DIM, THRESHOLD } from '../speakers.js';
 import { linkageCentroid, fcluster } from '../linkage.js';
 import { fbank } from '../fbank.js';
 import { sum32, argsortFallbacks } from '../pycompat.js';
@@ -97,6 +97,25 @@ for (const rid of index.recordings) {
     }
     console.log(`${rid} (${prep.chunks} windows): ${lines.join('; ')}`);
   });
+
+  test(`group with background ${rid}`, { skip: skip || (!fs.existsSync(path.join(REFS, rid, 'group.json')) && 'no group.json') }, () => {
+    const prep = { ...loadPrep(rid), level: read(Float32Array, rid, 'level.f32') };
+    const want = json(rid, 'group.json');
+    const lines = [];
+    for (const n of [null, 1, 2, 3, 4]) {
+      const w = want[n === null ? 'None' : String(n)];
+      const got = group(prep, n);
+      const r = compareTurns(got.turns, w.turns);
+      assert.ok(r.ok, `${rid} n=${n}: ${r.why ?? r.maxDiff}`);
+      assert.equal(got.background.length, w.background.length, `${rid} n=${n}: background spans`);
+      let bd = 0;
+      got.background.forEach(([a, b], i) => { bd = Math.max(bd, Math.abs(a - w.background[i][0]), Math.abs(b - w.background[i][1])); });
+      assert.ok(bd <= 1e-9, `${rid} n=${n}: background differs by ${bd}`);
+      const secs = got.background.reduce((s, [a, b]) => s + b - a, 0);
+      lines.push(`n=${n}: ${new Set(got.turns.map((t) => t.speaker)).size} speakers, background ${secs.toFixed(1)} s`);
+    }
+    console.log(`${rid} group: ${lines.join('; ')}`);
+  });
 }
 
 test('assign timing on the longest recording', { skip }, () => {
@@ -157,6 +176,13 @@ test('prepare glue on recorded model outputs', { skip }, async () => {
     count: sameBits(prep.count, read(Int16Array, d, 'count.i16')),
     embeddings: sameBits(prep.embeddings, read(Float32Array, d, 'emb.f32')),
   };
+  // loudness for background: sums in another order than NumPy's, so not bit for bit
+  const lvRef = read(Float32Array, d, 'level.f32');
+  let lvMax = 0;
+  for (let i = 0; i < lvRef.length; i++) lvMax = Math.max(lvMax, Math.abs(prep.level[i] - lvRef[i]));
+  assert.equal(prep.level.length, lvRef.length);
+  assert.ok(lvMax < 1e-3, `level differs by ${lvMax} dB`);
+  console.log(`prepare level: ${lvRef.length} values, max diff ${lvMax.toExponential(2)} dB`);
   console.log(`prepare on ${(x.length / 16000).toFixed(1)} s: ${window}/${meta.windows} windows (crop mismatches ${cropMismatch}), ` +
     `${job}/${meta.jobs} voiceprints (weight mismatches ${weightMismatch}), fbank max diff ${fbMax.toExponential(2)} ` +
     `(${fbMs.toFixed(1)} ms per 10 s window); outputs identical: ${JSON.stringify(same)}; glue ${ms.toFixed(0)} ms`);

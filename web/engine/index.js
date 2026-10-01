@@ -29,6 +29,11 @@ export const analyze = (x, opts) => analysis.analyze(x, opts);
 export const prepare = (x, models, progress) => speakers.prepare(x, models, progress);
 // Turns as [start, end, speaker] (speakers.assign gives Turn-like objects).
 export const assign = (prep, n) => speakers.assign(prep, n).map(t => [t.start, t.end, t.speaker]);
+// The same, with the background's spans: { turns, background: [[start, end]] }.
+export const group = (prep, n) => {
+  const g = speakers.group(prep, n);
+  return { turns: g.turns.map(t => [t.start, t.end, t.speaker]), background: g.background };
+};
 
 // --- each input on its own track -------------------------------------------------
 export const levels = (x) => sources.levels(x, RATE);

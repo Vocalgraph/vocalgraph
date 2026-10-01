@@ -14,13 +14,25 @@ pipeline logic follows pyannote's code step for step, with the configuration
 of the laptop pipeline (tensorlake/speaker-diarization-3.1 hyper-parameters,
 min_cluster_size overridden to 1).
 
-After the pipeline, the laptop pipeline's calibrated clean-up (diarize.py):
-  * merge_similar 0.35: fold a speaker into a larger one whose centroid is at
-    least this similar (one person split in two). Calibrated on recordings with
-    confirmed speaker counts: different people <= +0.274, split person >= +0.392.
-  * min_turn 0.8 s: a speaker whose longest single turn is shorter is folded
-    into whoever they sound most like (real speakers hold the floor at least
-    once; artifacts are only fragments).
+After the pipeline, its many small groups are joined into people:
+  * min_turn 0.8 s: a group whose longest single turn is shorter is folded
+    into the kept group it sounds most like (real speakers hold the floor at
+    least once; artifacts are only fragments).
+  * families: the kept groups are merged, most alike first, while the
+    talk-weighted average likeness of every pair of their members is at least
+    FAMILY_MERGE. An average, not a chain: a group joins a family only if it
+    sounds like the family as a whole, not just like one member of it. (The
+    earlier clean-up merged any two groups at least 0.35 alike, chaining, and
+    with a TV and another call in the background it merged two people into
+    one. Checked by ear on six recordings: two people in a room with
+    background voices, two people with crosstalk, a mic + Discord call,
+    two-voices.wav, and two of one person.)
+  * background (only when prepare's output carries `level`, which the
+    browser version's does): a family whose speech is BACKGROUND_DB or more
+    quieter than the main talker's is background (a TV, a call in another
+    room), given back as time spans, not as a speaker.
+  * with a number of speakers given: the family who talks least goes into
+    whoever they sound most like, until that many are left.
   * join turns across gaps <= 0.3 s, and number speakers by talk time.
 """
 from __future__ import annotations
@@ -45,10 +57,15 @@ THRESHOLD = 0.7045654963945799               # centroid-linkage cosine threshold
 MIN_CLUSTER_SIZE = 1                         # stock 12 deletes brief speakers (diarize.py)
 MIN_EMBED_SAMPLES = 400                      # WeSpeaker's minimum input
 
-# laptop pipeline clean-up (diarize.py defaults, calibrated)
-MERGE_SIMILAR = 0.35
+# joining groups into people (see the top)
 MIN_TURN = 0.8
+FAMILY_MERGE = 0.45
 JOIN_GAP = 0.3
+# background: this much quieter than the main talker (90th-percentile level
+# of each turn, median over the family's turns), on a LEVELS_PER_S grid
+BACKGROUND_DB = 10.0
+LEVELS_PER_S = 10
+BACKGROUND_MIN_TURN = 0.3                    # turns shorter than this don't count towards a level
 
 BATCH = 32
 
@@ -317,51 +334,6 @@ def _cosine(a, b) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
 
 
-def _cleanup(turns, centroids):
-    """The laptop pipeline's merge_similar_speakers + merge_small_speakers."""
-    labels = sorted({k for *_, k in turns})
-    cent = {k: centroids[k] for k in labels if k < len(centroids) and np.any(centroids[k])}
-    dur = {k: sum(b - a for a, b, kk in turns if kk == k) for k in labels}
-
-    # 1. one person split in two: fold smaller into the first larger one that is
-    #    similar enough (transitive), so the size filter sees whole people.
-    order = sorted(labels, key=dur.get, reverse=True)
-    root = {}
-    for i, k in enumerate(order):
-        if k not in cent:
-            continue
-        for bigger in order[:i]:
-            if bigger in cent and _cosine(cent[k], cent[bigger]) >= MERGE_SIMILAR:
-                r = bigger
-                while r in root:
-                    r = root[r]
-                if r != k:
-                    root[k] = r
-                break
-
-    def resolve(k):
-        while k in root:
-            k = root[k]
-        return k
-
-    turns = [(a, b, resolve(k)) for a, b, k in turns]
-
-    # 2. fold clusters that never hold the floor into whoever they sound like
-    labels = sorted({k for *_, k in turns})
-    total = {k: sum(b - a for a, b, kk in turns if kk == k) for k in labels}
-    longest = {k: max(b - a for a, b, kk in turns if kk == k) for k in labels}
-    keep = [k for k in labels if longest[k] >= MIN_TURN]
-    drop = [k for k in labels if longest[k] < MIN_TURN]
-    if keep and drop:
-        mapping = {}
-        for k in drop:
-            cands = [o for o in keep if o in cent and k in cent]
-            mapping[k] = (max(cands, key=lambda o: _cosine(cent[k], cent[o])) if cands
-                          else max(keep, key=total.get))
-        turns = [(a, b, mapping.get(k, k)) for a, b, k in turns]
-    return turns
-
-
 def _finish(turns) -> list[Turn]:
     """Join a speaker's turns across short gaps; speaker 0 talks most."""
     by = {}
@@ -403,17 +375,124 @@ def prepare(x: np.ndarray, progress=None) -> dict | None:
     return {"binary": binary.astype(np.uint8), "count": count.astype(np.int16), "embeddings": emb}
 
 
-def _fold(turns, centroids, n: int):
+def levels(x: np.ndarray) -> np.ndarray:
+    """Loudness of 16 kHz audio in dB (RMS), LEVELS_PER_S values a second:
+    what tells background voices apart. Add it to prepare()'s output as
+    "level" for assign() and group() to mark background."""
+    hop = RATE // LEVELS_PER_S
+    n = len(x) // hop
+    blocks = np.asarray(x[:n * hop], dtype=np.float64).reshape(n, hop)
+    return (20 * np.log10(np.sqrt((blocks * blocks).mean(axis=1)) + 1e-9)).astype(np.float32)
+
+
+def _unit(v):
+    v = np.asarray(v, dtype=np.float64)
+    n = math.sqrt(float(np.dot(v, v)))
+    return v / n if n > 0 else None
+
+
+def _families(turns, centroids):
+    """The grouping's groups joined into families (see the top). Returns the
+    turns labelled by family, and each family's voiceprint: the talk-weighted
+    sum of its members' unit voiceprints (None when none has one)."""
+    labels = sorted({k for *_, k in turns})
+    talk = {k: 0.0 for k in labels}
+    longest = {k: 0.0 for k in labels}
+    for a, b, k in turns:
+        talk[k] += b - a
+        longest[k] = max(longest[k], b - a)
+    unit = {k: _unit(centroids[k]) if k < len(centroids) else None for k in labels}
+    keep = [k for k in labels if longest[k] >= MIN_TURN] or [max(labels, key=talk.get)]
+    fam = {k: [k] for k in keep}
+    for k in labels:
+        if k in fam:
+            continue
+        cands = [o for o in keep if unit[o] is not None and unit[k] is not None]
+        target = (max(cands, key=lambda o: float(np.dot(unit[k], unit[o]))) if cands
+                  else max(keep, key=talk.get))
+        fam[target].append(k)
+
+    def weight(f):
+        return sum(talk[m] for m in fam[f])
+
+    def likeness(f, g):
+        num = den = 0.0
+        for a in fam[f]:
+            for b in fam[g]:
+                if unit[a] is not None and unit[b] is not None:
+                    w = talk[a] * talk[b]
+                    num += w * float(np.dot(unit[a], unit[b]))
+                    den += w
+        return num / den if den > 0 else -math.inf
+
+    while len(fam) > 1:
+        names = sorted(fam)
+        f, g = max(((p, q) for i, p in enumerate(names) for q in names[i + 1:]), key=lambda pq: likeness(*pq))
+        if likeness(f, g) < FAMILY_MERGE:
+            break
+        big, small = (f, g) if weight(f) >= weight(g) else (g, f)
+        fam[big] += fam.pop(small)
+    root = {m: f for f, ms in fam.items() for m in ms}
+    vec = {}
+    for f, ms in fam.items():
+        parts = [unit[m] * talk[m] for m in ms if unit[m] is not None]
+        vec[f] = np.sum(parts, axis=0) if parts else None
+    return [(a, b, root[k]) for a, b, k in turns], vec
+
+
+def _background(turns, level) -> set:
+    """Families BACKGROUND_DB or more quieter than the one who talks most."""
+    if level is None or not len(level):
+        return set()
+    level = np.asarray(level, dtype=np.float64)
+    spans: dict[int, list] = {}
+    for a, b, f in turns:
+        spans.setdefault(f, []).append((a, b))
+
+    def loud(f):
+        vals = []
+        for a, b in spans[f]:
+            if b - a < BACKGROUND_MIN_TURN:
+                continue
+            seg = level[int(a * LEVELS_PER_S):int(math.ceil(b * LEVELS_PER_S))]
+            if len(seg):
+                vals.append(float(np.percentile(seg, 90)))
+        return float(np.median(vals)) if vals else None
+    names = sorted(spans)
+    talk = {f: sum(b - a for a, b in spans[f]) for f in names}
+    main = max(names, key=talk.get)
+    top = loud(main)
+    if top is None:
+        return set()
+    out = set()
+    for f in names:
+        lv = loud(f) if f != main else None
+        if lv is not None and lv <= top - BACKGROUND_DB:
+            out.add(f)
+    return out
+
+
+def _join(spans) -> list[tuple[float, float]]:
+    """Spans joined across gaps <= JOIN_GAP, in order."""
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + JOIN_GAP:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _fold(turns, vec, n: int):
     """Merge speakers until there are n: each time, the one who talks least
-    goes into whoever they sound most like. Group voiceprints are the
-    talk-weighted mean of their members'."""
+    goes into whoever they sound most like (vec: talk-weighted voiceprints,
+    summed as they merge)."""
     talk: dict[int, float] = {}
     for a, b, k in turns:
         talk[k] = talk.get(k, 0.0) + b - a
-    unit = lambda v: v / (np.linalg.norm(v) + 1e-12)
-    vec = {k: unit(centroids[k]) * talk[k] if k < len(centroids) else None for k in talk}
+    vec = {k: vec.get(k) for k in talk}
     into = {}
-    live = set(talk)
+    live = sorted(talk)
     while len(live) > n:
         small = min(live, key=talk.get)
         others = [o for o in live if o != small]
@@ -424,7 +503,7 @@ def _fold(turns, centroids, n: int):
         talk[target] += talk[small]
         if vec[target] is not None and vec[small] is not None:
             vec[target] = vec[target] + vec[small]
-        live.discard(small)
+        live.remove(small)
 
     def resolve(k):
         while k in into:
@@ -433,36 +512,46 @@ def _fold(turns, centroids, n: int):
     return [(a, b, resolve(k)) for a, b, k in turns]
 
 
-def assign(prep: dict | None, num_speakers: int | None = None) -> list[Turn]:
-    """Speaker turns from prepare()'s output, largest talker first (speaker 0).
+def group(prep: dict | None, num_speakers: int | None = None) -> tuple[list[Turn], list[tuple[float, float]]]:
+    """Speaker turns from prepare()'s output, largest talker first (speaker
+    0), and the background's time spans (empty unless prep has "level").
 
-    With num_speakers given: the grouping and clean-up run as if the count
-    were unknown, then the speakers who talk least are merged into whoever
-    they sound most like until that many are left. Only if the grouping found
-    fewer is it asked to split into that many. (Asking the grouping for the
-    count directly makes it cut its tree at that many branches, and on a call
-    recording that merged the two real people and kept a few seconds of
-    crosstalk as the second "speaker": 62% of speech right, against 94%.)"""
+    With num_speakers given: the grouping runs as if the count were unknown,
+    then the speakers who talk least are merged into whoever they sound most
+    like until that many are left. Only if it found fewer is the grouping
+    asked to split into that many. (Asking it for the count directly makes it
+    cut its tree at that many branches, and on a call recording that merged
+    the two real people and kept a few seconds of crosstalk as the second
+    "speaker": 62% of speech right, against 94%.)"""
     if prep is None:
-        return []
+        return [], []
     binary = prep["binary"].astype(np.float32)
     count = prep["count"].astype(int)
     chunks = binary.shape[0]
     if num_speakers == 1:
         hard = np.zeros((chunks, LOCAL), dtype=np.int8)
         hard[binary.sum(axis=1) == 0] = -2
-        return _finish(_to_turns(_reconstruct(binary, hard, np.minimum(count, 1))))
+        return _finish(_to_turns(_reconstruct(binary, hard, np.minimum(count, 1)))), []
     hard, centroids = _cluster(prep["embeddings"], binary, None)
     hard[binary.sum(axis=1) == 0] = -2
-    turns = _cleanup(_to_turns(_reconstruct(binary, hard, count)), centroids)
+    turns, vec = _families(_to_turns(_reconstruct(binary, hard, count)), centroids)
+    bg = _background(turns, prep.get("level"))
+    back = [(a, b) for a, b, f in turns if f in bg]
+    turns = [t for t in turns if t[2] not in bg]
     found = len({k for *_, k in turns})
     if num_speakers and found > num_speakers:
-        turns = _fold(turns, centroids, num_speakers)
+        turns = _fold(turns, vec, num_speakers)
     elif num_speakers and found < num_speakers:
         hard, _ = _cluster(prep["embeddings"], binary, num_speakers)
         hard[binary.sum(axis=1) == 0] = -2
         turns = _to_turns(_reconstruct(binary, hard, np.minimum(count, num_speakers)))
-    return _finish(turns)
+        back = []
+    return _finish(turns), _join(back)
+
+
+def assign(prep: dict | None, num_speakers: int | None = None) -> list[Turn]:
+    """group()'s speaker turns."""
+    return group(prep, num_speakers)[0]
 
 
 def diarize(x: np.ndarray, num_speakers: int | None = None, progress=None) -> list[Turn]:

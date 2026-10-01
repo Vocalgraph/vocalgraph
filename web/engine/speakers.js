@@ -1,5 +1,6 @@
 // Who spoke when (vocalgraph/speakers.py): pyannote 3.1's speaker-diarization
-// pipeline without PyTorch, then the laptop pipeline's calibrated clean-up.
+// pipeline without PyTorch, then its groups joined into people, with quiet
+// background voices (a TV, a call in another room) set apart.
 // A line-for-line port: assign() gives the Python app's turns exactly (same
 // floats), which takes reproducing SciPy's linkage, NumPy's float32 sums and
 // unstable argsort, OpenBLAS's sdot and CPython's set order (pycompat.js).
@@ -18,10 +19,11 @@
 //   count       Int16Array  (frames,)
 //   embeddings  Float32Array (chunks, 3, 256), NaN for inactive local speakers
 //   chunks      number of 10 s windows
+//   level       Float32Array: loudness in dB, LEVELS_PER_S a second (levels()), for background
 
 import { fbank } from './fbank.js';
 import { linkageCentroid, fcluster, cdistCosine } from './linkage.js';
-import { argsort, sum32, sdot, norm32, pySum, pySetOrder } from './pycompat.js';
+import { argsort, sum32 } from './pycompat.js';
 
 const f32 = Math.fround;
 
@@ -32,14 +34,14 @@ export const NUM_FRAMES = 589, LOCAL = 3, DIM = 256;
 export const THRESHOLD = 0.7045654963945799;
 export const MIN_CLUSTER_SIZE = 1;
 export const MIN_EMBED_SAMPLES = 400;
-export const MERGE_SIMILAR = 0.35;
-export const MIN_TURN = 0.8;
+export const MIN_TURN = 0.8, FAMILY_MERGE = 0.45;
+// background: this much quieter than the main talker, on a LEVELS_PER_S grid (speakers.py)
+export const BACKGROUND_DB = 10.0, LEVELS_PER_S = 10, BACKGROUND_MIN_TURN = 0.3;
 export const JOIN_GAP = 0.3;
 
 /** powerset class -> (speaker 1, 2, 3) active. */
 export const POWERSET = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 0, 1], [0, 1, 1]];
 
-const F32_1E12 = f32(1e-12);
 
 /** np.rint: round half to even. */
 export function rint(x) {
@@ -194,7 +196,19 @@ export async function prepare(x16k, models, progress) {
   if (top === 0) return null;
   const emb = await embeddings(x, starts, binary, models, say);
   say(1.0);
-  return { binary, count, embeddings: emb, chunks };
+  return { binary, count, embeddings: emb, chunks, level: levels(x) };
+}
+
+/** Loudness in dB (RMS), LEVELS_PER_S values a second (speakers.levels). */
+export function levels(x) {
+  const hop = RATE / LEVELS_PER_S, n = Math.floor(x.length / hop);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s2 = 0;
+    for (let j = i * hop; j < (i + 1) * hop; j++) s2 += x[j] * x[j];
+    out[i] = 20 * Math.log10(Math.sqrt(s2 / hop) + 1e-9);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- assign ---
@@ -403,65 +417,10 @@ export function toTurns(discrete, frames, k) {
   return turns;
 }
 
-function cosine32(a, ao, b, bo) {
-  const den = f32(f32(norm32(a, ao, DIM) * norm32(b, bo, DIM)) + F32_1E12);
-  return f32(sdot(a, ao, b, bo, DIM) / den);
-}
-
 const tupleLess = (x, y) => {
   for (let i = 0; i < 3; i++) { if (x[i] < y[i]) return -1; if (x[i] > y[i]) return 1; }
   return 0;
 };
-
-/** The laptop pipeline's merge_similar_speakers + merge_small_speakers. */
-function cleanup(turns, centroids, nCent) {
-  let labels = [...new Set(turns.map((t) => t[2]))].sort((a, b) => a - b);
-  const cent = new Map();
-  for (const k of labels) {
-    if (k >= nCent) continue;
-    let any = false;
-    for (let j = 0; j < DIM && !any; j++) any = centroids[k * DIM + j] !== 0;
-    if (any) cent.set(k, k * DIM);
-  }
-  const durOf = (ts, k) => pySum(ts.filter((t) => t[2] === k).map(([a, b]) => b - a));
-  const dur = new Map(labels.map((k) => [k, durOf(turns, k)]));
-  const order = [...labels].sort((a, b) => dur.get(b) - dur.get(a));      // stable, like sorted(reverse=True)
-  const root = new Map();
-  order.forEach((k, i) => {
-    if (!cent.has(k)) return;
-    for (const bigger of order.slice(0, i)) {
-      if (cent.has(bigger) && cosine32(centroids, cent.get(k), centroids, cent.get(bigger)) >= MERGE_SIMILAR) {
-        let r = bigger;
-        while (root.has(r)) r = root.get(r);
-        if (r !== k) root.set(k, r);
-        break;
-      }
-    }
-  });
-  const resolve = (k) => { while (root.has(k)) k = root.get(k); return k; };
-  turns = turns.map(([a, b, k]) => [a, b, resolve(k)]);
-
-  labels = [...new Set(turns.map((t) => t[2]))].sort((a, b) => a - b);
-  const total = new Map(labels.map((k) => [k, durOf(turns, k)]));
-  const longest = new Map(labels.map((k) => {
-    let m = -Infinity;
-    for (const [a, b, kk] of turns) if (kk === k && b - a > m) m = b - a;
-    return [k, m];
-  }));
-  const keep = labels.filter((k) => longest.get(k) >= MIN_TURN);
-  const drop = labels.filter((k) => longest.get(k) < MIN_TURN);
-  if (keep.length && drop.length) {
-    const mapping = new Map();
-    for (const k of drop) {
-      const cands = keep.filter((o) => cent.has(o) && cent.has(k));
-      mapping.set(k, cands.length
-        ? maxBy(cands, (o) => cosine32(centroids, cent.get(k), centroids, cent.get(o)))
-        : maxBy(keep, (o) => total.get(o)));
-    }
-    turns = turns.map(([a, b, k]) => [a, b, mapping.has(k) ? mapping.get(k) : k]);
-  }
-  return turns;
-}
 
 // Python's max(items, key=...) / min(...): the first item with the extreme key.
 function maxBy(items, key) {
@@ -499,33 +458,151 @@ function finish(turns) {
     .sort((x, y) => x.start - y.start);
 }
 
+// --- groups into people (speakers.py's _families, _background, _fold), in float64
+
+const dot64 = (a, b) => { let s = 0; for (let j = 0; j < a.length; j++) s += a[j] * b[j]; return s; };
+
+function unit64(centroids, k) {
+  const v = Float64Array.from(centroids.subarray(k * DIM, (k + 1) * DIM));
+  const n = Math.sqrt(dot64(v, v));
+  if (!(n > 0)) return null;
+  for (let j = 0; j < DIM; j++) v[j] /= n;
+  return v;
+}
+
+/**
+ * The grouping's groups joined into families: brief ones folded into the
+ * kept group they sound most like, then families merged, most alike first,
+ * while the talk-weighted average likeness of their members is at least
+ * FAMILY_MERGE. Returns the turns labelled by family, and each family's
+ * voiceprint (talk-weighted sum of its members' unit voiceprints, or null).
+ */
+function families(turns, centroids, nCent) {
+  const labels = [...new Set(turns.map((t) => t[2]))].sort((a, b) => a - b);
+  const talk = new Map(labels.map((k) => [k, 0.0])), longest = new Map(labels.map((k) => [k, 0.0]));
+  for (const [a, b, k] of turns) {
+    talk.set(k, talk.get(k) + (b - a));
+    longest.set(k, Math.max(longest.get(k), b - a));
+  }
+  const unit = new Map(labels.map((k) => [k, k < nCent ? unit64(centroids, k) : null]));
+  let keep = labels.filter((k) => longest.get(k) >= MIN_TURN);
+  if (!keep.length) keep = [maxBy(labels, (k) => talk.get(k))];
+  const fam = new Map(keep.map((k) => [k, [k]]));
+  for (const k of labels) {
+    if (fam.has(k)) continue;
+    const cands = keep.filter((o) => unit.get(o) && unit.get(k));
+    const target = cands.length ? maxBy(cands, (o) => dot64(unit.get(k), unit.get(o))) : maxBy(keep, (o) => talk.get(o));
+    fam.get(target).push(k);
+  }
+  const weight = (f) => fam.get(f).reduce((s, m) => s + talk.get(m), 0);
+  const likeness = (f, g) => {
+    let num = 0, den = 0;
+    for (const a of fam.get(f)) {
+      for (const b of fam.get(g)) {
+        if (unit.get(a) && unit.get(b)) {
+          const w = talk.get(a) * talk.get(b);
+          num += w * dot64(unit.get(a), unit.get(b));
+          den += w;
+        }
+      }
+    }
+    return den > 0 ? num / den : -Infinity;
+  };
+  while (fam.size > 1) {
+    const names = [...fam.keys()].sort((a, b) => a - b);
+    const pairs = [];
+    for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) pairs.push([names[i], names[j]]);
+    const [f, g] = maxBy(pairs, ([p, q]) => likeness(p, q));
+    if (likeness(f, g) < FAMILY_MERGE) break;
+    const [big, small] = weight(f) >= weight(g) ? [f, g] : [g, f];
+    fam.get(big).push(...fam.get(small));
+    fam.delete(small);
+  }
+  const root = new Map();
+  for (const [f, ms] of fam) for (const m of ms) root.set(m, f);
+  const vec = new Map();
+  for (const [f, ms] of fam) {
+    let v = null;
+    for (const m of ms) {
+      if (!unit.get(m)) continue;
+      v = v || new Float64Array(DIM);
+      const u = unit.get(m), t = talk.get(m);
+      for (let j = 0; j < DIM; j++) v[j] += u[j] * t;
+    }
+    vec.set(f, v);
+  }
+  return { turns: turns.map(([a, b, k]) => [a, b, root.get(k)]), vec };
+}
+
+// NumPy's percentile (linear) and median, for sorted Float64 values.
+function percentileSorted(s, q) {
+  const pos = (s.length - 1) * q / 100, lo = Math.floor(pos), hi = Math.min(lo + 1, s.length - 1), t = pos - lo;
+  const a = s[lo], b = s[hi];
+  return t >= 0.5 ? b - (b - a) * (1 - t) : a + (b - a) * t;
+}
+function median(v) {
+  const s = Float64Array.from(v).sort(), n = s.length;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+/** Families BACKGROUND_DB or more quieter than the one who talks most. */
+function background(turns, level) {
+  const out = new Set();
+  if (!level || !level.length) return out;
+  const spans = new Map();
+  for (const [a, b, f] of turns) { if (!spans.has(f)) spans.set(f, []); spans.get(f).push([a, b]); }
+  const loud = (f) => {
+    const vals = [];
+    for (const [a, b] of spans.get(f)) {
+      if (b - a < BACKGROUND_MIN_TURN) continue;
+      const seg = Float64Array.from(level.subarray(Math.trunc(a * LEVELS_PER_S), Math.ceil(b * LEVELS_PER_S))).sort();
+      if (seg.length) vals.push(percentileSorted(seg, 90));
+    }
+    return vals.length ? median(vals) : null;
+  };
+  const names = [...spans.keys()].sort((a, b) => a - b);
+  const talk = new Map(names.map((f) => [f, spans.get(f).reduce((s, [a, b]) => s + (b - a), 0)]));
+  const main = maxBy(names, (f) => talk.get(f));
+  const top = loud(main);
+  if (top === null) return out;
+  for (const f of names) {
+    const lv = f !== main ? loud(f) : null;
+    if (lv !== null && lv <= top - BACKGROUND_DB) out.add(f);
+  }
+  return out;
+}
+
+/** Spans joined across gaps <= JOIN_GAP, in order. */
+function joinSpans(spans) {
+  const out = [];
+  for (const [a, b] of [...spans].sort((x, y) => x[0] - y[0] || x[1] - y[1])) {
+    if (out.length && a <= out[out.length - 1][1] + JOIN_GAP) out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+const cosine64 = (a, b) => dot64(a, b) / (Math.sqrt(dot64(a, a)) * Math.sqrt(dot64(b, b)) + 1e-12);
+
 /** Merge speakers until there are n: the one who talks least goes into whoever they sound most like. */
-function fold(turns, centroids, nCent, n) {
+function fold(turns, vec0, n) {
   const talk = new Map();
   for (const [a, b, k] of turns) talk.set(k, (talk.has(k) ? talk.get(k) : 0.0) + b - a);
-  const vec = new Map();
-  for (const k of talk.keys()) {
-    if (k >= nCent) { vec.set(k, null); continue; }
-    const den = f32(norm32(centroids, k * DIM, DIM) + F32_1E12);
-    const tk = f32(talk.get(k));
-    const v = new Float32Array(DIM);
-    for (let j = 0; j < DIM; j++) v[j] = f32(f32(centroids[k * DIM + j] / den) * tk);
-    vec.set(k, v);
-  }
+  const vec = new Map([...talk.keys()].map((k) => [k, vec0.get(k) ? Float64Array.from(vec0.get(k)) : null]));
   const into = new Map();
-  let live = pySetOrder([...talk.keys()]);
+  let live = [...talk.keys()].sort((a, b) => a - b);
   while (live.length > n) {
     const small = minBy(live, (k) => talk.get(k));
     const others = live.filter((o) => o !== small);
-    const cands = others.filter((o) => vec.get(o) !== null && vec.get(small) !== null);
+    const cands = others.filter((o) => vec.get(o) && vec.get(small));
     const target = cands.length
-      ? maxBy(cands, (o) => cosine32(vec.get(small), 0, vec.get(o), 0))
+      ? maxBy(cands, (o) => cosine64(vec.get(small), vec.get(o)))
       : maxBy(others, (o) => talk.get(o));
     into.set(small, target);
     talk.set(target, talk.get(target) + talk.get(small));
-    if (vec.get(target) !== null && vec.get(small) !== null) {
+    if (vec.get(target) && vec.get(small)) {
       const a = vec.get(target), b = vec.get(small);
-      vec.set(target, Float32Array.from(a, (v, j) => v + b[j]));
+      for (let j = 0; j < DIM; j++) a[j] += b[j];
     }
     live = live.filter((o) => o !== small);
   }
@@ -549,10 +626,12 @@ function inactiveToMinus2(hard, binary, chunks) {
 
 /**
  * Speaker turns from prepare()'s output, largest talker first (speaker 0):
- * [{ start, end, speaker }] in seconds of the analysed audio, by start.
+ * { turns: [{ start, end, speaker }] by start, background: [[start, end]] },
+ * in seconds of the analysed audio. Background needs prep.level (prepare
+ * gives it; older saved preps have none, and get no background).
  */
-export function assign(prep, numSpeakers = null) {
-  if (!prep) return [];
+export function group(prep, numSpeakers = null) {
+  if (!prep) return { turns: [], background: [] };
   const chunks = shapeOf(prep);
   const binary = prep.binary, count = prep.count;
   const capped = (m) => Int16Array.from(count, (v) => Math.min(v, m));
@@ -563,19 +642,28 @@ export function assign(prep, numSpeakers = null) {
   if (numSpeakers === 1) {
     const hard = new Int8Array(chunks * LOCAL);
     inactiveToMinus2(hard, binary, chunks);
-    return finish(turnsOf(hard, capped(1)));
+    return { turns: finish(turnsOf(hard, capped(1))), background: [] };
   }
   let { hard, centroids, k } = cluster(prep.embeddings, binary, chunks, null);
   inactiveToMinus2(hard, binary, chunks);
-  let turns = cleanup(turnsOf(hard, count), centroids, k);
+  const fams = families(turnsOf(hard, count), centroids, k);
+  const bg = background(fams.turns, prep.level);
+  let back = fams.turns.filter((t) => bg.has(t[2])).map(([a, b]) => [a, b]);
+  let turns = fams.turns.filter((t) => !bg.has(t[2]));
   const found = new Set(turns.map((t) => t[2])).size;
-  if (numSpeakers && found > numSpeakers) turns = fold(turns, centroids, k, numSpeakers);
+  if (numSpeakers && found > numSpeakers) turns = fold(turns, fams.vec, numSpeakers);
   else if (numSpeakers && found < numSpeakers) {
     ({ hard } = cluster(prep.embeddings, binary, chunks, numSpeakers));
     inactiveToMinus2(hard, binary, chunks);
     turns = turnsOf(hard, capped(numSpeakers));
+    back = [];
   }
-  return finish(turns);
+  return { turns: finish(turns), background: joinSpans(back) };
+}
+
+/** group()'s speaker turns. */
+export function assign(prep, numSpeakers = null) {
+  return group(prep, numSpeakers).turns;
 }
 
 /** prepare() then assign(). */
