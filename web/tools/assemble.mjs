@@ -24,7 +24,7 @@ mkdirSync(out, { recursive: true });
 // The pages and their scripts: the desktop app's, unchanged...
 const pages = join(repo, 'vocalgraph', 'static');
 for (const f of ['index.html', 'tracks.html', 'live.html']) cp(join(pages, f), join(out, f));
-for (const f of ['nav.js', 'voice.js']) cp(join(pages, f), join(out, 'static', f));
+for (const f of ['nav.js', 'voice.js', 'resonance.js']) cp(join(pages, f), join(out, 'static', f));
 // ...but with the browser version's boot.js, service worker and backend.
 cp(join(web, 'app', 'static', 'boot.js'), join(out, 'static', 'boot.js'));
 // The service worker carries the version: a new one makes browsers offer the update.

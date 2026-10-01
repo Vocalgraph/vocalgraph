@@ -31,10 +31,11 @@ const VoiceCharts = (() => {
   let DATA = null, cursor = null, host = null, tip = null, playT = 0;
   // The page owns zooming: view() gives the [t0, t1] seconds to show, and
   // label() formats a tick for a given span. Defaults: everything, m:ss.
-  let view = null, label = null, range = null;
+  let view = null, label = null, range = null, strips = null;
   const win = () => view ? view() : [0, DATA.duration];
   // Pitch floor / ceiling ("hot lava"): {floor, ceiling} in Hz, either null.
-  let guide = { floor: null, ceiling: null };
+  // With the pitch chart's own range, axisLo / axisHi (both or neither).
+  let guide = { floor: null, ceiling: null, axisLo: null, axisHi: null };
   const LAVA = 'var(--lava, #d6342a)';
 
   // Time ticks at round steps, about one per 110 px. Shared with the speaker
@@ -94,6 +95,8 @@ const VoiceCharts = (() => {
     plot.dataset.key = spec.key; plot.setAttribute('role', 'img');
     plot.setAttribute('aria-label', `${spec.title} over time. Values also listed in the table.`);
     card.append(head, desc, plot);
+    // Under the pitch chart: the resonance trend's summary sentence (resonance.js).
+    if (spec.key === 'pitch') { const n = document.createElement('p'); n.className = 'desc res-note'; card.append(n); }
     return card;
   }
 
@@ -114,9 +117,33 @@ const VoiceCharts = (() => {
     if (fitted) for (const [, v] of marks) { lo = Math.min(lo, v); hi = Math.max(hi, v); }   // always in view
     if (hi <= lo) hi = lo + 1;
     const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    // A pitch chart end the person set wins: exactly there, nothing added.
+    const set = spec.key === 'pitch' && (guide.axisLo != null || guide.axisHi != null);
+    if (set) {
+      if (guide.axisLo != null) lo = guide.axisLo;
+      if (guide.axisHi != null) hi = guide.axisHi;
+      if (hi <= lo) { if (guide.axisHi == null) hi = lo + 50; else lo = hi - 50; }
+    }
     const x = (v) => PAD.l + (v - t0) / span * plotW;
     const y = (v) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
-    const svg = svgEl(W, H), add = adder(svg);
+    // Under the pitch chart's time axis, the resonance trend strip (resonance.js).
+    // Before it, any strips the page adds there (live: who is speaking).
+    const more = spec.key === 'pitch' && strips ? strips() : [];
+    const tr = spec.key === 'pitch' ? resTrend() : null, extra = more.length * WHO + (tr ? STRIP : 0);
+    const svg = svgEl(W, H + extra), add = adder(svg);
+    more.forEach((st, i) => {
+      const mid = H + i * WHO + WHO / 2 + 2;
+      add('text', { x: PAD.l - 8, y: mid + 4, 'text-anchor': 'end', fill: 'var(--text-secondary)', 'font-size': 11, 'font-weight': 600 }).textContent = st.label;
+      add('rect', { x: PAD.l, y: mid - 9, width: plotW, height: 18, fill: 'var(--grid)', opacity: 0.25, rx: 3 });
+      st.draw(svg, { x, t0, t1, mid, h: 18 });
+    });
+    if (tr) {
+      const mid = H + more.length * WHO + STRIP / 2 + 2;
+      add('text', { x: PAD.l - 8, y: mid, 'text-anchor': 'end', fill: 'var(--text-secondary)', 'font-size': 11, 'font-weight': 600 }).textContent = 'Resonance';
+      add('text', { x: PAD.l - 8, y: mid + 13, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 10 }).textContent = 'thicker = darker';
+      add('rect', { x: PAD.l, y: mid - 12, width: plotW, height: 24, fill: 'var(--grid)', opacity: 0.25, rx: 3 });
+      Resonance.drawStrip(svg, tr, { x, t0, t1, mid, h: 24 });
+    }
     for (const gv of ticks(lo, hi, 4)) {
       add('line', { x1: PAD.l, x2: W - PAD.r, y1: y(gv), y2: y(gv), stroke: 'var(--grid)', 'stroke-width': 1 });
       add('text', { x: PAD.l - 8, y: y(gv) + 4, 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 11 })
@@ -124,13 +151,18 @@ const VoiceCharts = (() => {
     }
     // Floor / ceiling: the side past each is shaded, and the line labelled.
     for (const [kind, v] of marks) {
-      if (v < lo || v > hi) continue;
-      const yv = y(v), top = kind === 'floor' ? yv : PAD.t, h = kind === 'floor' ? H - PAD.b - yv : yv - PAD.t;
+      // Past the chart's range, the shading still covers what's lava on screen.
+      const yv = y(Math.max(lo, Math.min(hi, v))), top = kind === 'floor' ? yv : PAD.t, h = kind === 'floor' ? H - PAD.b - yv : yv - PAD.t;
       add('rect', { x: PAD.l, y: top, width: plotW, height: Math.max(0, h), fill: LAVA, opacity: 0.07 });
+      if (v < lo || v > hi) continue;
       add('line', { x1: PAD.l, x2: W - PAD.r, y1: yv, y2: yv, stroke: LAVA, 'stroke-width': 1.5, 'stroke-dasharray': '5 3' });
       add('text', { x: W - PAD.r - 4, y: kind === 'floor' ? yv + 13 : yv - 5, 'text-anchor': 'end', fill: LAVA,
         'font-size': 11, 'font-weight': 600 }).textContent = `${kind} ${Math.round(v)} Hz`;
     }
+    // Where to drag one in from, while it isn't set (nav.js does the dragging).
+    if (spec.key === 'pitch') for (const kind of ['ceiling', 'floor'].filter(k => guide[k] == null))
+      add('text', { x: W - PAD.r - 4, y: kind === 'ceiling' ? PAD.t + 11 : H - PAD.b - 4, 'text-anchor': 'end',
+        fill: 'var(--muted)', 'font-size': 10 }).textContent = `+ ${kind}`;
     add('line', { x1: PAD.l, x2: W - PAD.r, y1: H - PAD.b, y2: H - PAD.b, stroke: 'var(--axis)', 'stroke-width': 1 });
     // Same ticks and labels as the speaker timeline above.
     for (const tv of timeTicks(t0, t1, plotW))
@@ -139,7 +171,7 @@ const VoiceCharts = (() => {
     for (const s of spec.series) {
       let d = '', pen = false, lastX = null, lastY = null;
       for (const [tv, v] of pts[s.id]) {
-        if (v == null) { pen = false; continue; }
+        if (v == null || (set && (v < lo || v > hi))) { pen = false; continue; }   // off a set range: a gap
         const px = x(tv), py = y(v);
         d += (pen ? 'L' : 'M') + px.toFixed(1) + ' ' + py.toFixed(1) + ' ';
         pen = true; lastX = px; lastY = py;
@@ -148,8 +180,8 @@ const VoiceCharts = (() => {
       if (lastX != null && spec.series.length > 1)
         add('text', { x: Math.min(lastX + 6, W - 4), y: lastY + 4, fill: 'var(--text-secondary)', 'font-size': 11, 'font-weight': 600 }).textContent = s.label;
     }
-    add('line', { class: 'playhead', x1: 0, x2: 0, y1: 0, y2: H - PAD.b, stroke: 'var(--text-secondary)', 'stroke-width': 1.5, visibility: 'hidden' });
-    add('line', { class: 'crosshair', x1: 0, x2: 0, y1: PAD.t, y2: H - PAD.b, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' });
+    add('line', { class: 'playhead', x1: 0, x2: 0, y1: 0, y2: H - PAD.b + extra, stroke: 'var(--text-secondary)', 'stroke-width': 1.5, visibility: 'hidden' });
+    add('line', { class: 'crosshair', x1: 0, x2: 0, y1: PAD.t, y2: H - PAD.b + extra, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden' });
     for (const s of spec.series)
       add('circle', { class: 'dot', 'data-series': s.id, r: 4, fill: s.color, stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' });
     Object.assign(svg.dataset, { w: W, h: H, lo, hi });
@@ -186,8 +218,27 @@ const VoiceCharts = (() => {
     plot.replaceChildren(svg);
   }
 
+  // The resonance trend of the data shown, worked out again at most every
+  // couple of seconds while it keeps changing (live), straight away for new
+  // data. A page can say why there's none instead: data.resonance = 'why'.
+  const STRIP = 44, WHO = 26;
+  let res = { data: null, tr: null, at: 0 };
+  function resTrend() {
+    if (typeof Resonance === 'undefined' || typeof DATA.resonance === 'string') return null;
+    if (res.data !== DATA && (res.data == null || Date.now() - res.at > 2000)) res = { data: DATA, tr: Resonance.trend(DATA), at: Date.now() };
+    return res.tr;
+  }
+  function resNote() {
+    const n = host.querySelector('.res-note'); if (!n) return;
+    const tr = resTrend();
+    n.textContent = typeof DATA.resonance === 'string' ? DATA.resonance
+      : !tr ? 'Resonance trend: not enough measured speech yet.'
+      : tr.summary ? tr.summary.text : 'Resonance trend: shown under the chart, darker where the strip is darker and thicker.';
+  }
+
   function drawAll() {
     if (!DATA) return;
+    resNote();
     for (const spec of CHARTS) spec.summary ? drawRanges(spec) : drawChart(spec);
     positionCursor();
     playhead(playT);
@@ -246,6 +297,14 @@ const VoiceCharts = (() => {
       const i = document.createElement('i'); i.style.background = s.color;
       const b = document.createElement('b'); b.textContent = fmtVal(DATA.series[s.id][cursor], spec.unit);
       const n = document.createElement('span'); n.textContent = s.plain || s.label;
+      row.append(i, b, n); tip.append(row);
+    }
+    const rp = resTrend() && Resonance.at(resTrend(), DATA.time[cursor]);
+    if (rp) {
+      const row = document.createElement('div'); row.className = 'row';
+      const i = document.createElement('i'); i.style.background = Resonance.colour(Resonance.frac(rp.pct));
+      const b = document.createElement('b'); b.textContent = `${rp.pct > 0 ? '+' : ''}${rp.pct.toFixed(1)}%`;
+      const n = document.createElement('span'); n.textContent = `Resonance: ${Resonance.describe(rp.pct)}`;
       row.append(i, b, n); tip.append(row);
     }
     tip.hidden = false;
@@ -314,7 +373,9 @@ const VoiceCharts = (() => {
   function show(data, els) {
     ({ host, tip, meta, table } = els);
     view = els.view || null; label = els.label || null; range = els.range || null;
-    DATA = data; cursor = null;
+    // strips() -> [{ label, draw(svg, { x, t0, t1, mid, h }) }]: drawn under the pitch chart
+    strips = els.strips || null;
+    DATA = data; cursor = null; res = { data: null, tr: null, at: 0 };
     render();
   }
 
@@ -347,8 +408,17 @@ const VoiceCharts = (() => {
     return true;
   }
 
-  function setGuide(g) { guide = { floor: g?.floor ?? null, ceiling: g?.ceiling ?? null }; if (DATA && host) { renderMeta(); drawAll(); } }
+  // The pitch plot under the pointer, for dragging the floor / ceiling (Nav.pitchArea).
+  function pitchArea(ev) {
+    const svg = ev.target.closest?.('.plot[data-key="pitch"]')?.querySelector('svg');
+    if (!svg || !host?.contains(svg)) return null;
+    const r = svg.getBoundingClientRect(), W = +svg.dataset.w, H = +svg.dataset.h, k = r.width / W || 1;
+    return { top: r.top + PAD.t * k, bottom: r.top + (H - PAD.b) * k, left: r.left + PAD.l * k, right: r.left + (W - PAD.r) * k,
+             lo: +svg.dataset.lo, hi: +svg.dataset.hi };
+  }
 
-  return { show, update, playhead, redraw: drawAll, ticks: timeTicks, setGuide,
+  function setGuide(g) { guide = { floor: g?.floor ?? null, ceiling: g?.ceiling ?? null, axisLo: g?.axisLo ?? null, axisHi: g?.axisHi ?? null }; if (DATA && host) { renderMeta(); drawAll(); } }
+
+  return { show, update, playhead, redraw: drawAll, ticks: timeTicks, setGuide, pitchArea,
            clear: () => { DATA = null; cursor = null; if (tip) tip.hidden = true; } };
 })();
