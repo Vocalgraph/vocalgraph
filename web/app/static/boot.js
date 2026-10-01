@@ -59,12 +59,28 @@ window.VG = { web: true };
       'background:var(--accent,#2a78d6);color:var(--accent-text,#fff);cursor:pointer';
     go.addEventListener('click', async () => {
       try {
-        const s = await (await fetch('api/live/state')).json();
+        const s = await (await fetch('api/live/state', { signal: AbortSignal.timeout(3000) })).json();
         if (['starting', 'live', 'stopping', 'finishing'].includes(s.status) &&
             !confirm('A live session is recording. Updating reloads the page and stops it. Update anyway?')) return;
       } catch {}
       switching = true;
-      reg.waiting?.postMessage({ type: 'vg-update' });
+      go.disabled = true; go.textContent = 'Updating…';
+      // The version offered may have been replaced by an even newer one since
+      // the bar appeared, still installing: wait for that one instead.
+      let w = reg.waiting;
+      if (!w && reg.installing) {
+        const next = reg.installing;
+        await new Promise((done) => {
+          const check = () => { if (next.state !== 'installing') done(); };
+          next.addEventListener('statechange', check); check();
+        });
+        w = reg.waiting;
+      }
+      if (w) w.postMessage({ type: 'vg-update' });     // it takes over, and controllerchange reloads
+      setTimeout(() => {                                // didn't happen: say how to finish it by hand
+        text.textContent = 'Close every Vocalgraph tab, then open it again to finish updating.';
+        go.remove();
+      }, 8000);
     });
     bar.append(text, go);
     document.body.append(bar);
