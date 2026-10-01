@@ -59,7 +59,7 @@ window.VG = { web: true };
       'background:var(--accent,#2a78d6);color:var(--accent-text,#fff);cursor:pointer';
     go.addEventListener('click', async () => {
       try {
-        const s = await (await fetch('/api/live/state')).json();
+        const s = await (await fetch('api/live/state')).json();
         if (['starting', 'live', 'stopping', 'finishing'].includes(s.status) &&
             !confirm('A live session is recording. Updating reloads the page and stops it. Update anyway?')) return;
       } catch {}

@@ -373,7 +373,7 @@ function fail(msg) { clearInterval(timer); busy(null); $('errorText').textConten
 // so saves copied in from elsewhere show up on the next refresh.
 async function loadLibrary() {
   let items = [];
-  try { items = await (await fetch('/api/library')).json(); } catch { return; }
+  try { items = await (await fetch('api/library')).json(); } catch { return; }
   const list = $('libList');
   list.replaceChildren();
   for (const it of items) {
@@ -402,7 +402,7 @@ async function loadLibrary() {
     del.disabled = it.status === 'working';
     del.addEventListener('click', async () => {
       if (!confirm(`Delete "${it.name}" and everything made from it? This can't be undone.`)) return;
-      await fetch(`/api/jobs/${it.id}`, { method: 'DELETE' });
+      await fetch(`api/jobs/${it.id}`, { method: 'DELETE' });
       if (it.id === jobId) goHome(); else loadLibrary();
     });
     row.append(what, del);
@@ -475,7 +475,7 @@ async function upload(file) {
   form.append('file', file);
   // XHR rather than fetch, for upload progress on big recordings.
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/jobs');
+  xhr.open('POST', 'api/jobs');
   xhr.upload.onprogress = (e) => e.lengthComputable && setProgress('Uploading', e.loaded / e.total);
   xhr.onerror = () => fail('The upload failed. ' + Nav.lost);
   xhr.onload = () => {
@@ -492,7 +492,7 @@ function poll(inline) {
   clearInterval(timer);
   timer = setInterval(async () => {
     let s, r;
-    try { r = await fetch(`/api/jobs/${jobId}`); }
+    try { r = await fetch(`api/jobs/${jobId}`); }
     catch { return fail('Lost contact with Vocalgraph. ' + Nav.lost); }
     if (r.status === 404) return goHome();       // e.g. deleted, or an old address
     try { s = await r.json(); } catch { return fail('Something went wrong reading this recording.'); }
@@ -510,7 +510,7 @@ function poll(inline) {
 
 async function change(settings, scope) {
   busy(scope, 'Updating…');
-  const r = await fetch(`/api/jobs/${jobId}/settings`, {
+  const r = await fetch(`api/jobs/${jobId}/settings`, {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(settings) });
   if (!r.ok) return fail((await r.json().catch(() => ({}))).error || 'Could not apply that change.');
   poll(scope);
@@ -524,7 +524,7 @@ function saveNames(id) {
   clearTimeout(nameTimer);
   nameTimer = setTimeout(() => {
     const body = pendingNames; pendingNames = {};
-    fetch(`/api/jobs/${jobId}/names`, {
+    fetch(`api/jobs/${jobId}/names`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
   }, 500);
 }
@@ -544,11 +544,11 @@ function render() {
   // speaker change doesn't stop playback or lose the position.
   if (o.version !== shownVersion) {
     const v = `v=${encodeURIComponent(o.version)}`;
-    $('player').src = `/api/jobs/${jobId}/audio?${v}`;
-    $('download').href = `/api/jobs/${jobId}/audio?download=1&${v}`;
-    $('downloadM4a').href = `/api/jobs/${jobId}/audio.m4a?${v}`;
-    $('downloadFull').href = `/api/jobs/${jobId}/original`;
-    $('segments').href = `/api/jobs/${jobId}/segments?${v}`;
+    $('player').src = `api/jobs/${jobId}/audio?${v}`;
+    $('download').href = `api/jobs/${jobId}/audio?download=1&${v}`;
+    $('downloadM4a').href = `api/jobs/${jobId}/audio.m4a?${v}`;
+    $('downloadFull').href = `api/jobs/${jobId}/original`;
+    $('segments').href = `api/jobs/${jobId}/segments?${v}`;
     shownVersion = o.version;
     view = null;                           // a new cut is a new timeline
   }
@@ -606,7 +606,7 @@ function renderSpeakers() {
     const play = document.createElement('button'); play.className = 'btn secondary small'; play.textContent = 'Play';
     play.addEventListener('click', () => {
       const p = $('spkPlayer');
-      p.src = `/api/jobs/${jobId}/speaker/${s.id}/audio?r=${S.rev}`;
+      p.src = `api/jobs/${jobId}/speaker/${s.id}/audio?r=${S.rev}`;
       p.hidden = false; $('player').pause(); p.play();
     });
     const dl = document.createElement('a'); dl.className = 'btn secondary small'; dl.textContent = 'Download';
@@ -631,7 +631,7 @@ function renderSpeakers() {
 function relabel() {
   for (const a of document.querySelectorAll('#spkList a[data-spk]')) {
     const id = +a.dataset.spk;
-    a.href = `/api/jobs/${jobId}/speaker/${id}/audio?download=1&name=${encodeURIComponent(spkName(id))}`;
+    a.href = `api/jobs/${jobId}/speaker/${id}/audio?download=1&name=${encodeURIComponent(spkName(id))}`;
   }
   for (const td of document.querySelectorAll('#turnsTable td:first-child')) td.textContent = spkName(+td.dataset.spk);
   const vs = $('voiceSpeaker'), keep = vs.value;
@@ -888,7 +888,7 @@ async function loadVoice() {
   // shows real detail rather than a stretched overview.
   const points = Math.min(40000, Math.max(1400, Math.ceil((S.output.duration || 0) * 20)));
   try {
-    const r = await fetch(`/api/jobs/${jobId}/speaker/${spk}/voice?gate=${$('gate').checked ? 1 : 0}&points=${points}`);
+    const r = await fetch(`api/jobs/${jobId}/speaker/${spk}/voice?gate=${$('gate').checked ? 1 : 0}&points=${points}`);
     if (!r.ok) throw new Error('Could not measure this voice.');
     const data = await r.json();
     if (my !== voiceReq) return;

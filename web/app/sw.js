@@ -36,8 +36,16 @@ self.addEventListener('message', (ev) => {
   if (ev.data?.type === 'vg-version') ev.source?.postMessage({ type: 'vg-version', version: VERSION });
 });
 
-const isApi = (url) => url.origin === location.origin && url.pathname.startsWith('/api/');
 const scope = new URL(self.registration.scope);
+// The pages ask for "api/..." relative to themselves: "/vocalgraph/api/..." on
+// GitHub Pages. It has to be inside this worker's folder, or a click on a
+// download link (a navigation) never reaches this worker and goes to GitHub.
+// "/api/..." is still taken, from pages of before that change.
+const apiBase = scope.pathname + 'api/';
+const isApi = (url) => url.origin === location.origin && (url.pathname.startsWith(apiBase) || url.pathname.startsWith('/api/'));
+// The backend's routes are the desktop's, "/api/...", wherever the site is.
+const apiUrl = (url) => url.pathname.startsWith(apiBase)
+  ? new URL(url.pathname.slice(scope.pathname.length - 1) + url.search, url.origin).href : url.href;
 
 self.addEventListener('fetch', (ev) => {
   const req = ev.request, url = new URL(req.url);
@@ -109,7 +117,7 @@ async function forward(ev) {
   const client = await backendClient(ev);
   if (!client) return json(503, { error: 'Open Vocalgraph in a tab first.' });
   const req = ev.request;
-  const msg = { type: 'vg-api', method: req.method, url: req.url, headers: [...req.headers.entries()] };
+  const msg = { type: 'vg-api', method: req.method, url: apiUrl(new URL(req.url)), headers: [...req.headers.entries()] };
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const type = req.headers.get('content-type') || '';
     if (type.startsWith('multipart/form-data')) {
