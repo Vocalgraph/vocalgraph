@@ -75,11 +75,12 @@ export async function cut(blob, name, seconds) {
 // [{data, channels, name}]): as live.py makes it, the inputs summed into a mix
 // (amix normalize=0) as the first track and each input as a track of its own,
 // named. M4A (AAC 192k) or FLAC; several tracks in FLAC go in Matroska.
-export async function encodeLive(tracks, rate, fmt = 'm4a') {
+export async function encodeLive(tracks, rate, fmt = 'm4a', comment = '') {
   const inputs = {}, args = ['-v', 'error', '-y'];
   tracks.forEach((t, i) => { inputs[`in${i}.raw`] = t.data; args.push('-f', 's16le', '-ar', String(rate), '-ac', String(t.channels), '-i', `in${i}.raw`); });
   const n = tracks.length, ext = fmt === 'flac' ? (n > 1 ? 'mka' : 'flac') : 'm4a', out = `out.${ext}`;
-  const codec = fmt === 'flac' ? ['-c:a', 'flac'] : ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'];
+  const codec = [...(fmt === 'flac' ? ['-c:a', 'flac'] : ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart']),
+                 ...(comment ? ['-metadata', `comment=${comment}`] : [])];
   if (n === 1) args.push('-map', '0:a:0', ...codec, out);
   else {
     const mix = `${tracks.map((_, i) => `[${i}:a:0]`).join('')}amix=inputs=${n}:duration=longest:normalize=0[rec]`;

@@ -89,6 +89,11 @@ export class Session {
 
   get n() { return this.x.n; }
 
+  // Recording can start before the models are loaded: the sound is kept, and
+  // the analysis catches up once they're here.
+  ready(models, smile) { this.models = models; this.smile = smile; this.kick(); }
+  get preparing() { return !this.models || !this.smile; }
+
   // 16 kHz mono blocks from inputs.js: the mix, and each input when several.
   feed(mix, inputs) {
     this.x.push(V.to16bit(mix));
@@ -111,6 +116,7 @@ export class Session {
   }
 
   async step() {
+    if (this.preparing) return;
     // speakers: every complete 10 s window
     while (this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
     // voice: every complete 0.1 s block (the last part once the input ends)
