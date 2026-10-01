@@ -1,5 +1,6 @@
 // What only the page can do for the backend worker: list and open
-// microphones, and tell which helper download fits this computer. A
+// microphones (and, in Chromium browsers, the computer's own sound), and tell
+// which helper download fits this computer. A
 // microphone's sound goes from an AudioWorklet straight to the worker
 // (capture-worklet.js); the page only wires it up.
 const mics = new Map();          // id -> { ctx, stream, node }
@@ -14,13 +15,38 @@ async function listMics() {
       devices = await navigator.mediaDevices.enumerateDevices();
     } catch { /* refused: list them without names */ }
   }
-  return devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
+  const list = devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
     .map((d, i) => ({ id: 'mic:' + d.deviceId, name: d.label || `Microphone ${i + 1}`, kind: 'mic' }));
+  // Listed with the programs: all of the computer's sound, without the helper.
+  if (systemAudio()) list.push({ id: SYSTEM, name: "All of this computer's sound (no helper needed)", kind: 'app' });
+  return list;
 }
 
-// Opens a microphone and connects it to the worker through `port`.
+// The computer's own sound, through the browser's screen sharing with "share
+// system audio". Only Chromium browsers (Chrome, Edge...) give sound that
+// way, and only they have userAgentData, so that tells; Firefox and Safari
+// share no sound from a screen.
+const SYSTEM = 'system:';
+const systemAudio = () => !!(navigator.mediaDevices?.getDisplayMedia &&
+  navigator.userAgentData?.brands?.some(b => /Chromium/.test(b.brand)));
+
+async function systemStream() {
+  const stream = await navigator.mediaDevices.getDisplayMedia({
+    video: true,                      // a screen or tab is shared with its sound, never sound alone
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
+    systemAudio: 'include', monitorTypeSurfaces: 'include', selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude',
+  });
+  stream.getVideoTracks().forEach(t => t.stop());      // only the sound is kept
+  if (!stream.getAudioTracks().length) {
+    throw new Error('No sound was shared. Start again, choose "Entire screen" and tick "Also share system audio" ' +
+      '(or choose a tab and keep "Also share tab audio" ticked).');
+  }
+  return stream;
+}
+
+// Opens a microphone (or the computer's sound) and connects it to the worker through `port`.
 async function openMic({ id, deviceId }, port) {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+  const stream = id === SYSTEM ? await systemStream() : await navigator.mediaDevices.getUserMedia({ audio: {
     deviceId: deviceId && deviceId !== 'default' ? { exact: deviceId } : undefined,
     // The voice as it is: no cleaning up, which would change what's measured.
     echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } } });

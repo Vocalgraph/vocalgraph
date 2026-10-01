@@ -155,7 +155,8 @@ async function start(body) {
   const devs = (body.devices || (body.device ? [{ id: body.device, name: body.device_name }] : []))
     .filter(d => d && d.id).slice(0, 8);
   if (!devs.length) return error(400, 'Choose a microphone.');
-  const names = devs.map(d => String(d.name || d.id));
+  // The computer's sound (page.js) gets a short name for its track.
+  const names = devs.map(d => d.id === 'system:' ? 'Computer sound' : String(d.name || d.id));
   const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(`live-${id}`, { create: true });
   const session = new Session({ tracks: devs.length > 1 ? devs.length : 0, names, models, smile });
   session.numSpeakers = body.num_speakers ? parseInt(body.num_speakers, 10) : null;
