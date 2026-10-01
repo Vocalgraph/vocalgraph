@@ -1,7 +1,8 @@
-# Publishes the browser test page to GitHub Pages: web/pages-test, with the
-# openSMILE WebAssembly build (web/smile) and the two speaker models
-# (vocalgraph/models) beside it. No build step and no toolchain: the files are
-# copied as they are. Actions are pinned to exact commits.
+# Publishes the browser version to GitHub Pages: the desktop app's pages with
+# the browser backend, the ported engine, the WebAssembly builds and the
+# models, assembled by web/tools/assemble.mjs. Third-party files come from
+# web/package-lock.json (npm ci), not from a CDN. Node's version is read from
+# .nvmrc; actions are pinned to exact commits.
 name: Pages
 
 on:
@@ -9,7 +10,9 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "vocalgraph/static/**"
       - "vocalgraph/models/**"
+      - ".nvmrc"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -30,14 +33,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install pinned third-party files
+        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
       - name: Assemble the site
-        run: |
-          mkdir -p _site/models
-          cp -r web/pages-test/. _site/
-          cp -r web/smile _site/smile
-          cp vocalgraph/models/*.onnx _site/models/
-          touch _site/.nojekyll
-          ls -R _site | head -40
+        run: node web/tools/assemble.mjs _site && find _site -maxdepth 2 | sort | head -60
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

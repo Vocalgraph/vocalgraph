@@ -1,0 +1,12 @@
+{
+  "name": "vocalgraph-web",
+  "private": true,
+  "description": "Vocalgraph's browser version: pinned third-party files copied into the site at build time (nothing loads from a CDN).",
+  "license": "SEE LICENSE IN ../LICENSE.md",
+  "scripts": {
+    "site": "node tools/assemble.mjs"
+  },
+  "devDependencies": {
+    "onnxruntime-web": "1.30.0"
+  }
+}

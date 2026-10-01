@@ -1,0 +1,4 @@
+# PyInstaller and Inno Setup output (helper/build.ps1)
+build/
+dist/
+Output/

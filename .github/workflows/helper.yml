@@ -1,0 +1,126 @@
+# Builds the Vocalgraph Helper for Windows (PyInstaller exe + Inno Setup
+# installer), smoke-tests it, and uploads the installer and its SHA-256 file.
+# A tag helper-v<VERSION> (VERSION as in vocalgraph/helper.py) also publishes
+# them as a GitHub Release. Toolchain versions are read from the repo, never
+# written here: uv from scripts/uv-env.cmd, Python from .python-version,
+# PyInstaller from uv.lock, Inno Setup from helper/innosetup.version. Actions
+# are pinned to exact commits.
+name: Helper
+
+on:
+  push:
+    tags: ["helper-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.versions.outputs.helper }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pinned versions
+        id: versions
+        run: |
+          $uv = (Select-String -Path scripts/uv-env.cmd -Pattern 'UV_VERSION=([0-9.]+)').Matches[0].Groups[1].Value
+          $inno = (Get-Content helper/innosetup.version -Raw).Trim()
+          $helper = (Select-String -Path vocalgraph/helper.py -Pattern '^VERSION = "([0-9.]+)"').Matches[0].Groups[1].Value
+          if (-not $uv -or -not $inno -or -not $helper) { throw "couldn't read a version: uv '$uv', inno '$inno', helper '$helper'" }
+          "uv=$uv" >> $env:GITHUB_OUTPUT
+          "inno=$inno" >> $env:GITHUB_OUTPUT
+          "helper=$helper" >> $env:GITHUB_OUTPUT
+          Write-Host "uv $uv, Inno Setup $inno, helper $helper"
+
+      - name: The tag matches the helper's version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.versions.outputs.helper }}
+        run: |
+          if ($env:TAG -ne "helper-v$env:VERSION") { throw "tag $env:TAG doesn't match VERSION $env:VERSION in vocalgraph/helper.py" }
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ steps.versions.outputs.uv }}
+          enable-cache: false
+
+      - name: Install Python (from .python-version)
+        run: uv python install
+
+      - name: Install Inno Setup
+        env:
+          INNO: ${{ steps.versions.outputs.inno }}
+        run: choco install innosetup --version $env:INNO --yes --no-progress --allow-downgrade
+
+      - name: Build the exe and the installer
+        run: ./helper/build.ps1 -RequireInstaller
+
+      - name: Smoke test
+        env:
+          VERSION: ${{ steps.versions.outputs.helper }}
+        run: |
+          $exe = 'helper/dist/Vocalgraph Helper/Vocalgraph Helper.exe'
+          Start-Process -FilePath $exe -ArgumentList '--from-link', 'x'
+          $ok = $false
+          for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
+            Start-Sleep -Milliseconds 500
+            $code = curl.exe -s -o version.json -w '%{http_code}' -H 'Origin: https://vocalgraph.github.io' http://127.0.0.1:8766/version
+            $ok = $code -eq '200'
+          }
+          if (-not $ok) { throw "GET /version didn't answer 200 (last: $code)" }
+          $v = Get-Content version.json -Raw | ConvertFrom-Json
+          Write-Host "version: $(Get-Content version.json -Raw)"
+          if ($v.version -ne $env:VERSION -or $v.protocol -ne 1 -or -not $v.packaged) { throw 'unexpected /version' }
+          $bad = curl.exe -s -o NUL -w '%{http_code}' -H 'Origin: https://example.com' http://127.0.0.1:8766/version
+          if ($bad -ne '403') { throw "another origin got $bad, not 403" }
+          $none = curl.exe -s -o NUL -w '%{http_code}' http://127.0.0.1:8766/version
+          if ($none -ne '403') { throw "no origin got $none, not 403" }
+          # A windowed exe: Start-Process -Wait, or PowerShell wouldn't wait for it.
+          $quit = Start-Process -FilePath $exe -ArgumentList '--quit' -Wait -PassThru
+          if ($quit.ExitCode -ne 0) { throw "--quit exited $($quit.ExitCode)" }
+          if (Get-NetTCPConnection -LocalPort 8766 -State Listen -ErrorAction SilentlyContinue) { throw 'still listening after --quit' }
+          Get-Content "$env:LOCALAPPDATA/Vocalgraph Helper/helper.log"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vocalgraph-helper-${{ steps.versions.outputs.helper }}
+          path: |
+            helper/Output/*.exe
+            helper/Output/*.sha256
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/helper-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vocalgraph-helper-${{ needs.build.outputs.version }}
+          path: dist
+      - name: Check the checksum
+        working-directory: dist
+        run: sha256sum -c *.sha256
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          name: Vocalgraph Helper ${{ needs.build.outputs.version }}
+          files: |
+            dist/*.exe
+            dist/*.sha256
+          fail_on_unmatched_files: true
+          body: |
+            Vocalgraph Helper ${{ needs.build.outputs.version }} for Windows 10 (2004) and later.
+            Run `VocalgraphHelperSetup-${{ needs.build.outputs.version }}.exe`; no administrator rights needed.
+            It isn't code-signed, so Windows SmartScreen warns first: choose "More info", then "Run anyway".
+            Check the download against the `.sha256` file beside it.

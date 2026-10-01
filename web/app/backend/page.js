@@ -1,0 +1,67 @@
+// What only the page can do for the backend worker: list and open
+// microphones. A microphone's sound goes from an AudioWorklet straight to the
+// worker (capture-worklet.js); the page only wires it up.
+const mics = new Map();          // id -> { ctx, stream, node }
+
+async function listMics() {
+  let devices = await navigator.mediaDevices.enumerateDevices();
+  // Names are only given once the site may use a microphone: ask once.
+  if (devices.some(d => d.kind === 'audioinput' && !d.label)) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach(t => t.stop());
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch { /* refused: list them without names */ }
+  }
+  return devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'communications')
+    .map((d, i) => ({ id: 'mic:' + d.deviceId, name: d.label || `Microphone ${i + 1}`, kind: 'mic' }));
+}
+
+// Opens a microphone and connects it to the worker through `port`.
+async function openMic({ id, deviceId }, port) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: deviceId && deviceId !== 'default' ? { exact: deviceId } : undefined,
+    // The voice as it is: no cleaning up, which would change what's measured.
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } } });
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  await ctx.audioWorklet.addModule(new URL('capture-worklet.js', import.meta.url));
+  const src = ctx.createMediaStreamSource(stream);
+  const channels = Math.min(2, stream.getAudioTracks()[0]?.getSettings().channelCount || 1);
+  const node = new AudioWorkletNode(ctx, 'vocalgraph-capture', { processorOptions: { id, channels }, numberOfOutputs: 0 });
+  src.connect(node);
+  if (ctx.state === 'suspended') await ctx.resume();
+  node.port.postMessage({ port }, [port]);
+  mics.set(id, { ctx, stream, node });
+  // The audio clock against the computer's: the worker places samples by it.
+  const ts = ctx.getOutputTimestamp();
+  const clock = ts.performanceTime
+    ? { contextTime: ts.contextTime, epoch: performance.timeOrigin + ts.performanceTime }
+    : { contextTime: ctx.currentTime, epoch: performance.timeOrigin + performance.now() };
+  return { channels, clock, name: stream.getAudioTracks()[0]?.label };
+}
+
+function closeMic(id) {
+  const m = mics.get(id); if (!m) return;
+  m.node.port.postMessage({ stop: true });
+  m.stream.getTracks().forEach(t => t.stop());
+  m.ctx.close();
+  mics.delete(id);
+}
+
+// Requests from the worker: {kind: 'page', op, args, call} -> {kind: 'page-reply', call, result | error}.
+export function serve(worker) {
+  worker.addEventListener('message', async (ev) => {
+    const m = ev.data;
+    if (m?.kind !== 'page') return;
+    try {
+      let result;
+      if (m.op === 'mics') result = await listMics();
+      else if (m.op === 'openMic') result = await openMic(m.args, ev.ports[0]);
+      else if (m.op === 'closeMic') result = closeMic(m.args.id);
+      worker.postMessage({ kind: 'page-reply', call: m.call, result });
+    } catch (e) {
+      worker.postMessage({ kind: 'page-reply', call: m.call, error: e.message || String(e) });
+    }
+  });
+  addEventListener('pagehide', () => { for (const id of [...mics.keys()]) closeMic(id); });
+}

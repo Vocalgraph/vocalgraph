@@ -53,15 +53,15 @@
   <footer>
     Part of <a href="https://github.com/Vocalgraph/vocalgraph">Vocalgraph</a> (PolyForm Noncommercial 1.0.0).
     Voice measurements use a WebAssembly build of <a href="https://github.com/audeering/opensmile">openSMILE</a> 3.0.2 by
-    audEERING GmbH, for non-commercial use only under the <a href="smile/LICENSE-openSMILE.txt">audEERING Research License</a>
-    (<a href="smile/NOTICE.md">build notes</a>). Speaker models: pyannote segmentation-3.0 (MIT) and WeSpeaker ResNet34-LM
+    audEERING GmbH, for non-commercial use only under the <a href="../smile/LICENSE-openSMILE.txt">audEERING Research License</a>
+    (<a href="../smile/NOTICE.md">build notes</a>). Speaker models: pyannote segmentation-3.0 (MIT) and WeSpeaker ResNet34-LM
     (CC BY 4.0). Model runtime: ONNX Runtime Web (MIT).
   </footer>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.all.min.js"
   integrity="sha384-5URwgKAGS31PQX06sHDOIB6bk/2FTNB7z3n4trPAWV9sCv5xwV+qiGRxPkuHv6Gf" crossorigin="anonymous"></script>
 <script type="module">
-import { loadSmile } from './smile/smile.js';
+import { loadSmile } from '../smile/smile.js';
 const P = new URLSearchParams(location.search), HELPER = 'http://127.0.0.1:8766', WS = 'ws://127.0.0.1:8766';
 const R = { page: location.origin + location.pathname, secure: isSecureContext, isolated: self.crossOriginIsolated,
   threads: +(P.get('threads') || 1), cores: navigator.hardwareConcurrency };
@@ -186,14 +186,14 @@ async function testModels() {
     ort.env.wasm.numThreads = R.threads;
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
     const [crop, segRef, fb, w, embRef] = await Promise.all(['crop', 'seg', 'fbank', 'weights', 'emb'].map(n => bin(`ref/models/${n}.f32`, Float32Array)));
-    const seg = await ort.InferenceSession.create('models/segmentation-3.0.onnx', { executionProviders: ['wasm'] });
+    const seg = await ort.InferenceSession.create('../models/segmentation-3.0.onnx', { executionProviders: ['wasm'] });
     const x = new ort.Tensor('float32', crop, [1, 1, 160000]);
     let y; r.seg_ms = await timed(async () => { y = (await seg.run({ x })).y.data; }, 3);
     let md = 0; for (let i = 0; i < y.length; i++) md = Math.max(md, Math.abs(y[i] - segRef[i])); r.seg_max_diff = md;
     line('models', md < 1e-3 ? 'ok' : 'bad', 'Who talks', `matches the desktop app (largest difference ${md.toExponential(1)}), ${r.seg_ms} ms per 10 s window on the processor`);
     for (const ep of (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'])) {
       try {
-        const emb = await ort.InferenceSession.create('models/wespeaker-resnet34-LM-masked.onnx', { executionProviders: [ep] });
+        const emb = await ort.InferenceSession.create('../models/wespeaker-resnet34-LM-masked.onnx', { executionProviders: [ep] });
         const B = ep === 'webgpu' ? 8 : 1, fbB = new Float32Array(fb.length * B), wB = new Float32Array(w.length * B);
         for (let k = 0; k < B; k++) { fbB.set(fb, k * fb.length); wB.set(w, k * w.length); }
         let e; const ms = await timed(async () => { e = (await emb.run({ fbank: new ort.Tensor('float32', fbB, [B, 998, 80]), weights: new ort.Tensor('float32', wB, [B, 125]) })).embedding.data; }, 3);

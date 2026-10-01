@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 web/helper-prototype/results.jsonl
 web/helper-prototype/helper.log
+web/node_modules/
+_site/

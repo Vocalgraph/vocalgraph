@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="static/boot.js"></script>
 <title>Vocalgraph</title>
 <style>
   :root {
@@ -215,7 +216,7 @@
   <div id="sideBody">
     <div class="lib-list" id="libList"></div>
     <p class="side-empty" id="libEmpty" hidden>Nothing yet. Drop a recording in to start.</p>
-    <p class="side-note">Saved in the app's <code>library</code> folder on this computer.</p>
+    <p class="side-note" data-where>Saved in the app's <code>library</code> folder on this computer.</p>
   </div>
 </aside>
 <main>
@@ -343,8 +344,8 @@
 </main>
 </div>
 <div class="tooltip" id="tooltip" hidden></div>
-<script src="/static/voice.js"></script>
-<script src="/static/nav.js"></script>
+<script src="static/voice.js"></script>
+<script src="static/nav.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let jobId = null, timer = null, S = null, names = {}, shownVersion = null, voiceRev = null;
@@ -476,7 +477,7 @@ async function upload(file) {
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/jobs');
   xhr.upload.onprogress = (e) => e.lengthComputable && setProgress('Uploading', e.loaded / e.total);
-  xhr.onerror = () => fail('The upload failed. Is the Vocalgraph window still open?');
+  xhr.onerror = () => fail('The upload failed. ' + Nav.lost);
   xhr.onload = () => {
     let body = {};
     try { body = JSON.parse(xhr.responseText); } catch {}
@@ -492,7 +493,7 @@ function poll(inline) {
   timer = setInterval(async () => {
     let s, r;
     try { r = await fetch(`/api/jobs/${jobId}`); }
-    catch { return fail('Lost contact with Vocalgraph. Is its window still open?'); }
+    catch { return fail('Lost contact with Vocalgraph. ' + Nav.lost); }
     if (r.status === 404) return goHome();       // e.g. deleted, or an old address
     try { s = await r.json(); } catch { return fail('Something went wrong reading this recording.'); }
     if (s.error && s.status === 'error') return fail(s.error || 'Something went wrong.');

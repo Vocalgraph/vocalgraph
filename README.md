@@ -10,6 +10,31 @@ The cut-off is chosen for each recording, so quiet words and soft phrase
 endings are kept. Everything runs on your own computer; recordings are never
 uploaded anywhere.
 
+There are two ways to use it: in your browser, with nothing to install, or as
+an app you set up on your computer. Both give the same results.
+
+## In your browser
+
+Open **https://vocalgraph.github.io/vocalgraph/** in Chrome, Edge or Firefox.
+It's the same app, running inside the browser: the recording you drop in is
+analysed on your computer, and nothing is sent anywhere (the page is locked so
+it can't send anything). Your recordings are kept in the browser on this
+computer; clearing the site's data in the browser deletes them.
+
+- **Recordings** works as described below.
+- **Live** records from your microphones. To record **one program's sound**
+  (a call, a video), the browser needs the small **Vocalgraph Helper** app on
+  this computer (Windows): the Live page offers to start it or download it.
+  Your browser asks once to let the page reach it.
+- When a new version is published, a small bar offers **Update now**; it never
+  switches by itself, so it can't interrupt a recording.
+- It uses your graphics card where the browser allows (Chrome and Edge do), and
+  is fast without it. It's slower on phones and old laptops.
+
+The browser version needs a browser that runs service workers (private windows
+in Firefox don't). The app below is still the way to go on a Mac, where the
+browser version hasn't been tried yet.
+
 ## Set it up (once)
 
 You need an internet connection for this step only.
@@ -274,3 +299,8 @@ License, also allows non-commercial use only; commercial use of openSMILE, or
 of features extracted with it, needs a licence from audEERING. The bundled
 speaker models are under MIT and CC BY 4.0. Details and attribution are in
 `THIRD_PARTY_NOTICES.md`.
+
+The browser version ships WebAssembly builds of openSMILE (same licence, see
+`web/smile/NOTICE.md`) and of FFmpeg with LAME (LGPL 2.1, see
+`web/ffmpeg/LICENSE-FFmpeg.md`), and ONNX Runtime Web (MIT). How it is put
+together is in `web/README.md`.

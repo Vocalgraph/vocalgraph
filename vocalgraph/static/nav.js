@@ -11,7 +11,19 @@ const Nav = (() => {
   const setLayout = (l) => store.set('st.layout', l);
   // The recording last open in Recordings, so coming back from Live returns to it.
   const rememberJob = (id) => store.set('st.job', id || null);
-  const recordingsHref = (id = store.get('st.job'), l = layout()) => (l === 'track' ? '/tracks' : '/') + (id ? `#${id}` : '');
+  // Page addresses: the desktop app serves /, /tracks and /live; the browser
+  // version (boot.js sets VG.web) is plain files next to each other.
+  const web = !!(window.VG && window.VG.web);
+  const href = (page) => web ? { recordings: 'index.html', tracks: 'tracks.html', live: 'live.html' }[page]
+                             : { recordings: '/', tracks: '/tracks', live: '/live' }[page];
+  // Wording that differs: where recordings are kept, and what to try when the
+  // backend stops answering (the desktop app's window closed; the browser tab's
+  // worker stopped).
+  const where = web ? 'Saved in this browser, on this computer. Clearing this site’s data in the browser deletes them.'
+                    : null;
+  const lost = web ? 'Try reloading the page.' : 'Is its window still open?';
+  if (where) addEventListener('DOMContentLoaded', () => { for (const n of document.querySelectorAll('.side-note[data-where]')) n.textContent = where; });
+  const recordingsHref = (id = store.get('st.job'), l = layout()) => href(l === 'track' ? 'tracks' : 'recordings') + (id ? `#${id}` : '');
 
   const css = `
     .nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
@@ -41,7 +53,7 @@ const Nav = (() => {
       modes.append(t); return t;
     };
     const rec = tab('Recordings', recordingsHref(), mode === 'recordings');
-    const live = tab('Live', '/live', mode === 'live');
+    const live = tab('Live', href('live'), mode === 'live');
     // Worked out on click, so it follows the layout switch and the last recording opened.
     if (mode !== 'recordings') rec.addEventListener('click', () => { rec.href = recordingsHref(); });
 
@@ -148,5 +160,5 @@ const Nav = (() => {
     const st = document.createElement('style'); st.id = 'guide-css'; st.textContent = guideCss; document.head.append(st);
   }
 
-  return { mount, layout, setLayout, rememberJob, recordingsHref, guide, onGuide, guideControl, guideStats, restoreScroll };
+  return { mount, layout, setLayout, rememberJob, recordingsHref, href, web, lost, guide, onGuide, guideControl, guideStats, restoreScroll };
 })();

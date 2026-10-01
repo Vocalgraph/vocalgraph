@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="static/boot.js"></script>
 <title>Vocalgraph Live</title>
 <style>
   :root {
@@ -233,6 +234,7 @@
           that program is recorded, not the rest of the computer, and you still hear it as normal. Programs appear once
           they have made a sound; click Refresh if one is missing. Inputs are mixed for the analysis, and each is also
           kept as its own track in the saved file.</p>
+        <p class="hint" id="helperNote" hidden></p>
       </div>
       <label for="format">Save the full recording as</label>
       <select id="format">
@@ -346,8 +348,8 @@
 </aside>
 </div>
 <div class="tooltip" id="tooltip" hidden></div>
-<script src="/static/voice.js"></script>
-<script src="/static/nav.js"></script>
+<script src="static/voice.js"></script>
+<script src="static/nav.js"></script>
 <script>
 'use strict';
 const $ = (id) => document.getElementById(id);
@@ -440,12 +442,41 @@ async function loadSources() {
   [DEVICES, LIBRARY_DONE] = await Promise.all([
     api('/api/live/devices').catch(() => []),
     api('/api/library').then(l => l.filter(j => j.status === 'done')).catch(() => [])]);
+  // The browser version records programs through a helper app on this
+  // computer; it says here when the helper isn't running or needs updating.
+  const note = DEVICES.find(d => d.kind === 'notice');
+  DEVICES = DEVICES.filter(d => d.kind !== 'notice');
+  helperNote(note);
   let saved = [];
   try { saved = JSON.parse(store.get('live.sources') || '[]'); } catch {}
   $('sources').replaceChildren();
   (saved.length ? saved : ['']).forEach((v, i) => addSourceRow(v, i === 0));
   const fmt = store.get('live.format'); if (fmt) $('format').value = fmt;
   syncSources();
+}
+function helperNote(note) {
+  const box = $('helperNote');
+  box.hidden = !note; box.replaceChildren();
+  if (!note) return;
+  box.append(document.createTextNode(note.text + ' '));
+  if (note.start) {
+    const b = el('button', 'linkbtn', 'Start the helper'); b.type = 'button';
+    b.addEventListener('click', async () => {
+      b.disabled = true; b.textContent = 'Starting…';
+      location.href = note.start;                           // the browser asks first
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 750));
+        const d = await api('/api/live/devices').catch(() => []);
+        if (!d.some(x => x.kind === 'notice' && x.start)) { store.set('live.sources', JSON.stringify(sourceValues().filter(Boolean))); return loadSources(); }
+      }
+      b.disabled = false; b.textContent = 'Start the helper';
+    });
+    box.append(b, document.createTextNode(' '));
+  }
+  if (note.download) {
+    const a = el('a', null, note.downloadText || 'Download the helper'); a.href = note.download; a.target = '_blank'; a.rel = 'noopener';
+    box.append(a);
+  }
 }
 function addSourceRow(value, first) {
   const row = el('div', 'source');
@@ -563,7 +594,7 @@ async function poll() {
     if (wasRunning && !running()) loadLibrary();
     if (S.job && S.job.status === 'done' && freshJob !== S.job.id) { freshJob = S.job.id; loadLibrary(); }
     render();
-  } catch (e) { showError('Lost contact with the app. Is its window still open?'); }
+  } catch (e) { showError('Lost contact with the app. ' + Nav.lost); }
 }
 
 // The session clock, running smoothly between polls: the server's duration

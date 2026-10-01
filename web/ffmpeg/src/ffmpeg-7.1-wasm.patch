@@ -1,0 +1,210 @@
+diff --git a/fftools/Makefile b/fftools/Makefile
+index 083a136..1fd3a8d 100644
+--- a/fftools/Makefile
++++ b/fftools/Makefile
+@@ -22,6 +22,7 @@ OBJS-ffmpeg +=                  \
+     fftools/objpool.o           \
+     fftools/sync_queue.o        \
+     fftools/thread_queue.o      \
++    fftools/wasm_entry.o        \
+ 
+ OBJS-ffplay += fftools/ffplay_renderer.o
+ 
+diff --git a/fftools/ffmpeg.c b/fftools/ffmpeg.c
+index 420ba3c..becc318 100644
+--- a/fftools/ffmpeg.c
++++ b/fftools/ffmpeg.c
+@@ -545,6 +545,12 @@ void update_benchmark(const char *fmt, ...)
+     }
+ }
+ 
++/* wasm: file scope (not function statics) so ffmpeg_wasm_reset() can reset them */
++static int64_t print_report_last_time = -1;
++static int print_report_first_report = 1;
++#define last_time    print_report_last_time
++#define first_report print_report_first_report
++
+ static void print_report(int is_last_report, int64_t timer_start, int64_t cur_time, int64_t pts)
+ {
+     AVBPrint buf, buf_script;
+@@ -552,8 +558,6 @@ static void print_report(int is_last_report, int64_t timer_start, int64_t cur_ti
+     int vid;
+     double bitrate;
+     double speed;
+-    static int64_t last_time = -1;
+-    static int first_report = 1;
+     uint64_t nb_frames_dup = 0, nb_frames_drop = 0;
+     int mins, secs, us;
+     int64_t hours;
+@@ -785,10 +789,14 @@ static void set_tty_echo(int on)
+ #endif
+ }
+ 
++#undef last_time
++#undef first_report
++static int64_t keyboard_last_time;
++#define last_time keyboard_last_time
++
+ static int check_keyboard_interaction(int64_t cur_time)
+ {
+     int i, key;
+-    static int64_t last_time;
+     if (received_nb_signals)
+         return AVERROR_EXIT;
+     /* read_key() returns 0 on EOF */
+@@ -849,6 +857,8 @@ static int check_keyboard_interaction(int64_t cur_time)
+     return 0;
+ }
+ 
++#undef last_time
++
+ /*
+  * The following code is the main loop of the file converter
+  */
+@@ -943,6 +953,61 @@ static int64_t getmaxrss(void)
+ #endif
+ }
+ 
++#ifdef __EMSCRIPTEN__
++/*
++ * wasm: main() runs many times in one process. Put every global this file,
++ * ffmpeg_opt.c, cmdutils.c and opt_common.c keep back to its initial value,
++ * and undo the library-wide settings that options change (-v, -cpuflags,
++ * -max_alloc, -report). The arrays themselves were freed by
++ * ffmpeg_cleanup() at the end of the previous run.
++ */
++#include "libavutil/cpu.h"
++
++void ffmpeg_opt_reset(void);
++void opt_common_reset(void);
++
++static void ffmpeg_wasm_reset(void)
++{
++    atomic_store(&nb_output_dumped, 0);
++    memset(&current_time, 0, sizeof(current_time));
++    progress_avio   = NULL;
++    input_files     = NULL;  nb_input_files  = 0;
++    output_files    = NULL;  nb_output_files = 0;
++    filtergraphs    = NULL;  nb_filtergraphs = 0;
++    decoders        = NULL;  nb_decoders     = 0;
++    vstats_file     = NULL;
++#if HAVE_TERMIOS_H
++    restore_tty = 0;
++#endif
++    received_sigterm    = 0;
++    received_nb_signals = 0;
++    atomic_store(&transcode_init_done, 0);
++    ffmpeg_exited       = 0;
++    copy_ts_first_pts   = AV_NOPTS_VALUE;
++    print_report_last_time    = -1;
++    print_report_first_report = 1;
++    keyboard_last_time        = 0;
++
++    hide_banner = 0;
++    av_dict_free(&sws_dict);
++    av_dict_free(&swr_opts);
++    av_dict_free(&format_opts);
++    av_dict_free(&codec_opts);
++    ffmpeg_opt_reset();
++    opt_common_reset();
++
++    av_log_set_level(AV_LOG_INFO);
++    av_log_set_flags(0);
++    av_log_set_callback(av_log_default_callback);
++    av_force_cpu_flags(-1);
++    av_max_alloc(INT_MAX);
++    /* One thread per pipeline stage (as the scheduler creates them), but no
++     * frame/slice threads inside codecs and filters: they would each need a
++     * Web Worker from the pool, and they do not change the output. */
++    av_cpu_force_count(1);
++}
++#endif
++
+ int main(int argc, char **argv)
+ {
+     Scheduler *sch = NULL;
+@@ -950,6 +1015,10 @@ int main(int argc, char **argv)
+     int ret;
+     BenchmarkTimeStamps ti;
+ 
++#ifdef __EMSCRIPTEN__
++    ffmpeg_wasm_reset();
++#endif
++
+     init_dynload();
+ 
+     setvbuf(stderr,NULL,_IONBF,0); /* win32 runtime needs this */
+diff --git a/fftools/ffmpeg_opt.c b/fftools/ffmpeg_opt.c
+index f639a1c..9487973 100644
+--- a/fftools/ffmpeg_opt.c
++++ b/fftools/ffmpeg_opt.c
+@@ -86,6 +86,46 @@ int ignore_unknown_streams = 0;
+ int copy_unknown_streams = 0;
+ int recast_media = 0;
+ 
++#ifdef __EMSCRIPTEN__
++/* wasm: the defaults above again, for the next run of main() */
++void ffmpeg_opt_reset(void);
++void ffmpeg_opt_reset(void)
++{
++    audio_drift_threshold = 0.1;
++    dts_delta_threshold   = 10;
++    dts_error_threshold   = 3600*30;
++#if FFMPEG_OPT_VSYNC
++    video_sync_method     = VSYNC_AUTO;
++#endif
++    frame_drop_threshold  = 0;
++    do_benchmark          = 0;
++    do_benchmark_all      = 0;
++    do_hex_dump           = 0;
++    do_pkt_dump           = 0;
++    copy_ts               = 0;
++    start_at_zero         = 0;
++    copy_tb               = -1;
++    debug_ts              = 0;
++    exit_on_error         = 0;
++    abort_on_flags        = 0;
++    print_stats           = -1;
++    stdin_interaction     = 1;
++    max_error_rate        = 2.0/3;
++    av_freep(&filter_nbthreads);
++    filter_complex_nbthreads = 0;
++    vstats_version        = 2;
++    auto_conversion_filters = 1;
++    stats_period          = 500000;
++    ignore_unknown_streams = 0;
++    copy_unknown_streams  = 0;
++    recast_media          = 0;
++    file_overwrite        = 0;
++    no_file_overwrite     = 0;
++    filter_hw_device      = NULL;
++    av_freep(&vstats_filename);
++}
++#endif
++
+ static void uninit_options(OptionsContext *o)
+ {
+     /* all OPT_SPEC and OPT_TYPE_STRING can be freed in generic way */
+diff --git a/fftools/opt_common.c b/fftools/opt_common.c
+index 021ed75..b04623e 100644
+--- a/fftools/opt_common.c
++++ b/fftools/opt_common.c
+@@ -148,6 +148,18 @@ int show_license(void *optctx, const char *opt, const char *arg)
+ 
+ static int warned_cfg = 0;
+ 
++#ifdef __EMSCRIPTEN__
++void opt_common_reset(void);
++void opt_common_reset(void)
++{
++    if (report_file)
++        fclose(report_file);
++    report_file       = NULL;
++    report_file_level = AV_LOG_DEBUG;
++    warned_cfg        = 0;
++}
++#endif
++
+ #define INDENT        1
+ #define SHOW_VERSION  2
+ #define SHOW_CONFIG   4

@@ -23,3 +23,8 @@ dependencies = [
 [tool.uv]
 # An app run from its folder, not a library: no build step, no wheel.
 package = false
+
+[dependency-groups]
+# Packaging the helper (helper/). Not installed by `uv sync` unless asked for
+# with `--group helper`: only `dev` is a default group.
+helper = ["pyinstaller==6.22.3"]
