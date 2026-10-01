@@ -77,7 +77,7 @@ const Nav = (() => {
     if (mode !== 'live') {
       const check = async () => {
         let on = false;
-        try { const s = await (await fetch('/api/live/state')).json(); on = ['starting', 'live', 'stopping', 'finishing'].includes(s.status); } catch {}
+        try { const s = await (await fetch('api/live/state')).json(); on = ['starting', 'live', 'stopping', 'finishing'].includes(s.status); } catch {}
         const dot = live.querySelector('.rec-dot');
         if (on && !dot) { const d = document.createElement('i'); d.className = 'rec-dot'; d.title = 'Recording now'; live.prepend(d); }
         if (!on && dot) dot.remove();

@@ -411,7 +411,7 @@ function applyLayout() {
 
 async function loadLibrary() {
   let items = [];
-  try { items = await (await fetch('/api/library')).json(); } catch { return; }
+  try { items = await (await fetch('api/library')).json(); } catch { return; }
   const list = $('libList'); list.replaceChildren();
   for (const it of items) {
     const row = el('div', 'lib' + (it.id === freshJob ? ' fresh' : ''));
@@ -440,8 +440,8 @@ $('sideToggle').addEventListener('click', () => {
 let DEVICES = [], LIBRARY_DONE = [];
 async function loadSources() {
   [DEVICES, LIBRARY_DONE] = await Promise.all([
-    api('/api/live/devices').catch(() => []),
-    api('/api/library').then(l => l.filter(j => j.status === 'done')).catch(() => [])]);
+    api('api/live/devices').catch(() => []),
+    api('api/library').then(l => l.filter(j => j.status === 'done')).catch(() => [])]);
   // The browser version records programs through a helper app on this
   // computer; it says here when the helper isn't running or needs updating.
   const note = DEVICES.find(d => d.kind === 'notice');
@@ -472,7 +472,7 @@ function helperNote(note) {
       let downloaded = false;
       for (let i = 0; i < (downloaded ? 160 : 20); i++) {
         await new Promise(r => setTimeout(r, downloaded ? 1500 : 750));
-        const d = await api('/api/live/devices').catch(() => []);
+        const d = await api('api/live/devices').catch(() => []);
         if (!d.some(x => x.kind === 'notice' && x.start)) { store.set('live.sources', JSON.stringify(sourceValues().filter(Boolean))); return loadSources(); }
         if (i === 10 && !downloaded && note.auto && note.file && !store.get('helper.seen')) {
           downloaded = true; i = 0;
@@ -565,19 +565,19 @@ $('start').addEventListener('click', async () => {
       .map(s => ({ id: s.value.slice(4), name: s.selectedOptions[0].dataset.name }));
   }
   $('start').disabled = true; showError('');
-  try { await api('/api/live/start', body); await poll(); }
+  try { await api('api/live/start', body); await poll(); }
   catch (e) { showError(e.message); }
   finally { $('start').disabled = false; }
 });
 $('stop').addEventListener('click', async () => {
   $('stop').disabled = true;
-  try { await api('/api/live/stop', {}); } catch (e) { showError(e.message); }
+  try { await api('api/live/stop', {}); } catch (e) { showError(e.message); }
 });
 $('discard').addEventListener('click', async () => {
   if (!confirm('Throw this recording away? It will not be saved.')) return;
-  try { await api('/api/live/discard', {}); S = null; render(); await poll(); } catch (e) { showError(e.message); }
+  try { await api('api/live/discard', {}); S = null; render(); await poll(); } catch (e) { showError(e.message); }
 });
-$('count').addEventListener('change', () => api('/api/live/settings', { num_speakers: $('count').value || null }).catch(e => showError(e.message)));
+$('count').addEventListener('change', () => api('api/live/settings', { num_speakers: $('count').value || null }).catch(e => showError(e.message)));
 for (const b of document.querySelectorAll('.seg [data-span]'))
   b.addEventListener('click', () => { span = b.dataset.span; store.set('live.span', span); syncSpan(); statsAt = 0; drawSoon(); });
 function syncSpan() {
@@ -610,7 +610,7 @@ $('voiceWho').addEventListener('change', () => { voiceWho = $('voiceWho').value;
 
 async function poll() {
   try {
-    const s = await api('/api/live/state');
+    const s = await api('api/live/state');
     if (s.id && s.id !== sessionId) { sessionId = s.id; resetFrames(); shownT = []; shownTouched = false; clock.at = null; }
     const wasRunning = running();
     S = s;
@@ -671,7 +671,7 @@ async function pullFrames() {
   framesBusy = true;
   try {
     for (let guard = 0; guard < 30; guard++) {             // catch up in pieces after opening mid-session
-      const d = await api(`/api/live/frames?from=${F.n}`);
+      const d = await api(`api/live/frames?from=${F.n}`);
       if (d.from !== F.n) { resetFrames(); continue; }
       addFrames(d); F.total = d.total;
       if (d.next >= d.total) break;
@@ -800,21 +800,21 @@ function renderSaved() {
   } else if (j.status === 'working') {
     $('savedText').textContent = `Saved to your library. Trimming it now: ${(j.stage || 'working').toLowerCase()}.`;
     $('savedBar').hidden = false; $('savedBar').firstElementChild.style.width = ((j.frac ?? 0) * 100) + '%';
-    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+    link(`Download full recording (${fmt})`, `api/jobs/${j.id}/original`, 'secondary');
   } else if (j.status === 'done') {
     $('savedText').textContent = 'Saved to your library and trimmed.'; $('savedBar').hidden = true;
-    link('Download trimmed MP3', `/api/jobs/${j.id}/audio?download=1`, 'primary');
-    link('Download trimmed M4A', `/api/jobs/${j.id}/audio.m4a`, 'secondary');
-    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+    link('Download trimmed MP3', `api/jobs/${j.id}/audio?download=1`, 'primary');
+    link('Download trimmed M4A', `api/jobs/${j.id}/audio.m4a`, 'secondary');
+    link(`Download full recording (${fmt})`, `api/jobs/${j.id}/original`, 'secondary');
     const open = link('Open in Recordings', Nav.recordingsHref(j.id), 'secondary');
     open.addEventListener('click', () => { open.href = Nav.recordingsHref(j.id); Nav.rememberJob(j.id); });
   } else {
     $('savedText').textContent = 'The recording was saved, but trimming it failed: ' + (j.error || 'unknown error');
     $('savedBar').hidden = true;
-    link(`Download full recording (${fmt})`, `/api/jobs/${j.id}/original`, 'secondary');
+    link(`Download full recording (${fmt})`, `api/jobs/${j.id}/original`, 'secondary');
   }
   const again = el('button', 'btn quiet', 'New live session');
-  again.addEventListener('click', async () => { await api('/api/live/new', {}).catch(e => showError(e.message)); S = null; render(); poll(); });
+  again.addEventListener('click', async () => { await api('api/live/new', {}).catch(e => showError(e.message)); S = null; render(); poll(); });
   acts.append(again);
 }
 
@@ -823,7 +823,7 @@ function nameInput(s) {
   input.dataset.id = s.id;
   input.addEventListener('change', () => {
     const v = input.value.trim(); S.names[s.id] = v;
-    api('/api/live/names', { [s.id]: v }).catch(e => showError(e.message));
+    api('api/live/names', { [s.id]: v }).catch(e => showError(e.message));
     drawSoon();
   });
   return input;

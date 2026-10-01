@@ -381,7 +381,7 @@ function busy(text) {
 
 async function loadLibrary() {
   let items = [];
-  try { items = await (await fetch('/api/library')).json(); } catch { return; }
+  try { items = await (await fetch('api/library')).json(); } catch { return; }
   const list = $('libList');
   list.replaceChildren();
   for (const it of items) {
@@ -404,7 +404,7 @@ async function loadLibrary() {
     del.disabled = it.status === 'working';
     del.addEventListener('click', async () => {
       if (!confirm(`Delete "${it.name}" and everything made from it? This can't be undone.`)) return;
-      await fetch(`/api/jobs/${it.id}`, { method: 'DELETE' });
+      await fetch(`api/jobs/${it.id}`, { method: 'DELETE' });
       if (it.id === jobId) goHome(); else loadLibrary();
     });
     row.append(what, del); list.append(row);
@@ -450,7 +450,7 @@ function upload(file) {
   $('fileName').textContent = file.name; show(['working']); setProgress('Uploading', 0);
   const form = new FormData(); form.append('file', file);
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/jobs');
+  xhr.open('POST', 'api/jobs');
   xhr.upload.onprogress = (e) => e.lengthComputable && setProgress('Uploading', e.loaded / e.total);
   xhr.onerror = () => fail('The upload failed. ' + Nav.lost);
   xhr.onload = () => {
@@ -465,7 +465,7 @@ function poll(inline) {
   clearInterval(timer);
   timer = setInterval(async () => {
     let r, s;
-    try { r = await fetch(`/api/jobs/${jobId}`); } catch { return fail('Lost contact with Vocalgraph. ' + Nav.lost); }
+    try { r = await fetch(`api/jobs/${jobId}`); } catch { return fail('Lost contact with Vocalgraph. ' + Nav.lost); }
     if (r.status === 404) return goHome();
     try { s = await r.json(); } catch { return fail('Something went wrong reading this recording.'); }
     if (s.status === 'error') return fail(s.error || 'Something went wrong.');
@@ -484,7 +484,7 @@ function poll(inline) {
 
 async function change(settings) {
   busy('Updating…');
-  const r = await fetch(`/api/jobs/${jobId}/settings`, { method: 'POST',
+  const r = await fetch(`api/jobs/${jobId}/settings`, { method: 'POST',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
   if (!r.ok) return fail((await r.json().catch(() => ({}))).error || 'Could not apply that change.');
   poll(true);
@@ -496,7 +496,7 @@ function saveName(id) {
   clearTimeout(nameTimer);
   nameTimer = setTimeout(() => {
     const body = pendingNames; pendingNames = {};
-    fetch(`/api/jobs/${jobId}/names`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    fetch(`api/jobs/${jobId}/names`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }, 500);
 }
 
@@ -512,7 +512,7 @@ async function render(first, revChanged) {
   $('sThr').textContent = `${S.threshold} dB`;
   if (o.version !== shownVersion) {
     const t = shownVersion == null ? 0 : Math.min($('player').currentTime, o.duration);
-    $('player').src = `/api/jobs/${jobId}/audio?v=${encodeURIComponent(o.version)}`;
+    $('player').src = `api/jobs/${jobId}/audio?v=${encodeURIComponent(o.version)}`;
     if (t) $('player').currentTime = t;
     shownVersion = o.version;
     view = first || view[1] > o.duration ? [0, o.duration] : view;
@@ -554,7 +554,7 @@ function renderSpeakers() {
     play.addEventListener('click', () => {
       const p = $('spkPlayer');
       if (!p.paused && p.dataset.spk === String(s.id)) { p.pause(); return; }
-      p.src = `/api/jobs/${jobId}/speaker/${s.id}/audio?r=${S.rev}`; p.dataset.spk = s.id;
+      p.src = `api/jobs/${jobId}/speaker/${s.id}/audio?r=${S.rev}`; p.dataset.spk = s.id;
       $('player').pause(); p.play();
     });
     acts.append(play);
@@ -609,12 +609,12 @@ function renderDownloads() {
   const d = $('downloads'); d.replaceChildren();
   const v = encodeURIComponent(S.output.version);
   const add = (text, href, primary) => { const a = el('a', `btn ${primary ? 'primary' : 'secondary'} small`, text); a.href = href; d.append(a); };
-  add('Trimmed MP3', `/api/jobs/${jobId}/audio?download=1&v=${v}`, true);
-  add('Trimmed M4A', `/api/jobs/${jobId}/audio.m4a?v=${v}`);
-  add('Full recording', `/api/jobs/${jobId}/original`);
+  add('Trimmed MP3', `api/jobs/${jobId}/audio?download=1&v=${v}`, true);
+  add('Trimmed M4A', `api/jobs/${jobId}/audio.m4a?v=${v}`);
+  add('Full recording', `api/jobs/${jobId}/original`);
   for (const s of S.speakers || [])
-    add(`${spkName(s.id)} only`, `/api/jobs/${jobId}/speaker/${s.id}/audio?download=1&name=${encodeURIComponent(spkName(s.id))}`);
-  add('Cut list (JSON)', `/api/jobs/${jobId}/segments?v=${v}`);
+    add(`${spkName(s.id)} only`, `api/jobs/${jobId}/speaker/${s.id}/audio?download=1&name=${encodeURIComponent(spkName(s.id))}`);
+  add('Cut list (JSON)', `api/jobs/${jobId}/segments?v=${v}`);
 }
 
 // ---- voice data --------------------------------------------------------------
@@ -628,7 +628,7 @@ async function loadVoices() {
     const key = `${id}-${gate}`;
     if (V[key]) continue;
     try {
-      const r = await fetch(`/api/jobs/${jobId}/speaker/${id}/voice?gate=${gate}&points=${points}`);
+      const r = await fetch(`api/jobs/${jobId}/speaker/${id}/voice?gate=${gate}&points=${points}`);
       if (r.ok) V[key] = await r.json();
     } catch {}
     if (my !== voiceReq) return;
