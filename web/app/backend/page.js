@@ -1,6 +1,7 @@
 // What only the page can do for the backend worker: list and open
-// microphones. A microphone's sound goes from an AudioWorklet straight to the
-// worker (capture-worklet.js); the page only wires it up.
+// microphones, and tell which helper download fits this computer. A
+// microphone's sound goes from an AudioWorklet straight to the worker
+// (capture-worklet.js); the page only wires it up.
 const mics = new Map();          // id -> { ctx, stream, node }
 
 async function listMics() {
@@ -48,6 +49,36 @@ function closeMic(id) {
   mics.delete(id);
 }
 
+// Which helper download fits this computer: {os: 'windows' | 'mac' | null,
+// chip: 'apple-silicon' | 'intel' | null}. Chromium browsers say outright
+// (client hints). Safari and Firefox call every Mac Intel, so there the
+// graphics card's name decides when it's given (Apple's own only come with
+// Apple Silicon), and otherwise Apple Silicon, which every Mac since 2020 has.
+// The page also offers the other Mac download, in case this is wrong.
+async function system() {
+  const ua = navigator.userAgent, hints = navigator.userAgentData;
+  const platform = hints?.platform || '';
+  let os = null, chip = null;
+  if (platform === 'Windows' || (!platform && /Windows NT/.test(ua))) os = 'windows';
+  // An iPad asks for the Mac site too, but has a touch screen.
+  else if (platform === 'macOS' || (!platform && /Macintosh/.test(ua) && navigator.maxTouchPoints < 2)) os = 'mac';
+  if (os !== 'mac') return { os, chip };
+  try {
+    const h = await hints?.getHighEntropyValues(['architecture']);
+    if (h?.architecture) chip = h.architecture === 'arm' ? 'apple-silicon' : 'intel';
+  } catch { /* not given */ }
+  if (!chip) {
+    try {
+      const gl = document.createElement('canvas').getContext('webgl');
+      const name = String(gl?.getParameter(gl.RENDERER) || '');
+      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      if (/Apple M\d/.test(name)) chip = 'apple-silicon';
+      else if (/Intel|AMD|Radeon|NVIDIA/i.test(name)) chip = 'intel';
+    } catch { /* no WebGL */ }
+  }
+  return { os, chip: chip || 'apple-silicon' };
+}
+
 // Requests from the worker: {kind: 'page', op, args, call} -> {kind: 'page-reply', call, result | error}.
 export function serve(worker) {
   worker.addEventListener('message', async (ev) => {
@@ -58,6 +89,7 @@ export function serve(worker) {
       if (m.op === 'mics') result = await listMics();
       else if (m.op === 'openMic') result = await openMic(m.args, ev.ports[0]);
       else if (m.op === 'closeMic') result = closeMic(m.args.id);
+      else if (m.op === 'system') result = await system();
       worker.postMessage({ kind: 'page-reply', call: m.call, result });
     } catch (e) {
       worker.postMessage({ kind: 'page-reply', call: m.call, error: e.message || String(e) });

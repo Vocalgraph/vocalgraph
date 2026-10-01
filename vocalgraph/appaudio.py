@@ -31,9 +31,11 @@ if sys.platform == "win32":
     ole32 = ctypes.OleDLL("ole32")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     HRESULT = ctypes.HRESULT
+    WINFUNCTYPE = ctypes.WINFUNCTYPE
 else:                        # importable everywhere; apps() is simply empty
     ole32 = kernel32 = None
     HRESULT = ctypes.c_long
+    WINFUNCTYPE = ctypes.CFUNCTYPE   # only so the module loads: the Windows code is never called here
 
 
 class GUID(ctypes.Structure):
@@ -74,7 +76,7 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 def _method(obj, index: int, *argtypes, restype=HRESULT):
     """Method `index` of COM interface pointer `obj` (a c_void_p)."""
     vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-    fn = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[index])
+    fn = WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtbl[index])
     return lambda *args: fn(obj, *args)
 
 
@@ -285,9 +287,9 @@ class _WAVEFORMATEX(ctypes.Structure):
                 ("wBitsPerSample", ctypes.c_ushort), ("cbSize", ctypes.c_ushort)]
 
 
-_QI = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))
-_REF = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
-_DONE = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p)
+_QI = WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))
+_REF = WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+_DONE = WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p)
 
 
 class _Handler:

@@ -26,5 +26,14 @@ package = false
 
 [dependency-groups]
 # Packaging the helper (helper/). Not installed by `uv sync` unless asked for
-# with `--group helper`: only `dev` is a default group.
-helper = ["pyinstaller==6.22.3"]
+# with `--group helper`: only `dev` is a default group. The builds install it
+# alone (`--only-group helper`), so it lists what the helper itself imports:
+# on Windows only the standard library; on a Mac also ScreenCaptureKit's
+# bindings and numpy (same versions as the app's, from uv.lock).
+helper = [
+    "pyinstaller==6.22.3",
+    "numpy; sys_platform == 'darwin'",
+    "pyobjc-framework-ScreenCaptureKit; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia; sys_platform == 'darwin'",
+    "pyobjc-framework-libdispatch; sys_platform == 'darwin'",
+]

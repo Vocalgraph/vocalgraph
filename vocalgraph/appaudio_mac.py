@@ -19,6 +19,7 @@ Same names as appaudio.py's Windows versions: supported(), apps(), AppCapture.
 from __future__ import annotations
 
 import platform
+import sys
 import threading
 import time
 
@@ -33,6 +34,9 @@ HIDDEN = {"com.apple.WindowManager", "com.apple.dock", "com.apple.controlcenter"
 TIMEOUT = 10.0                       # seconds to wait for macOS to answer
 PERMISSION_HELP = ("Allow Screen & System Audio Recording for Terminal in System Settings -> Privacy & Security "
                    "(or for whichever program started Vocalgraph), then quit Vocalgraph and start it again.")
+if getattr(sys, "frozen", False):    # the Vocalgraph Helper app, which gets the permission itself
+    PERMISSION_HELP = ("Allow Vocalgraph Helper in System Settings -> Privacy & Security -> Screen & System Audio "
+                       "Recording, then reload this page and press Start the helper.")
 
 
 def _macos() -> tuple[int, ...]:
@@ -89,7 +93,9 @@ def apps() -> list[dict]:
         content = _content()
     except PermissionError as exc:
         # Shown in the input list, greyed out, so the fix is where it's needed.
-        return [{"id": "", "name": f"Apps: {exc}", "playing": False, "disabled": True}]
+        # "permission": macOS only applies a newly given permission to a
+        # program started after it, which the helper acts on.
+        return [{"id": "", "name": f"Apps: {exc}", "playing": False, "disabled": True, "permission": True}]
     import os
     seen, out = set(), []
     for app in content.applications():

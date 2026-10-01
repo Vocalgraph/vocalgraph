@@ -1,6 +1,6 @@
 # Vocalgraph Helper
 
-A small Windows program that lets the Vocalgraph web page
+A small program for Windows and macOS that lets the Vocalgraph web page
 (<https://vocalgraph.github.io/vocalgraph/>) record one desktop program's
 sound: a call, a game, a browser tab's player. A web page can't reach another
 program's audio, so the helper does it and streams the sound to the page, on
@@ -16,6 +16,9 @@ version 2004 or later: process loopback). This folder packages it:
 | `installer.iss` | Inno Setup: the per-user installer |
 | `build.ps1` | builds both, with a SHA-256 file for the installer |
 | `innosetup.version` | the Inno Setup version builds are tested with |
+| `vocalgraph-helper-mac.spec` | PyInstaller: `Vocalgraph Helper.app` for macOS (see [Mac](#mac)) |
+| `build-mac.sh` | builds the app and its disk image, with a SHA-256 file |
+| `smoke-mac.sh` | the Mac build's test in the workflow |
 
 ## Install and uninstall
 
@@ -24,7 +27,8 @@ Run `VocalgraphHelperSetup-<version>.exe` from the
 for your Windows user only, with no administrator rights, to
 `%LOCALAPPDATA%\Programs\Vocalgraph Helper`, and registers the `vocalgraph://`
 link so the page's **Start the helper** button can open it (your browser asks
-first). A Start menu entry is optional.
+first). A Start menu entry is optional. When it finishes, the installer
+starts the helper, so the page that offered the download finds it.
 
 **It isn't code-signed**, so Windows SmartScreen warns before it runs:
 "Windows protected your PC ... Unknown publisher". Choose **More info**, check
@@ -121,7 +125,65 @@ workflow artifacts only.
 
 ## Mac
 
-`vocalgraph.helper` imports and runs on macOS too (capture through
-`vocalgraph/appaudio_mac.py`, untested). There the `vocalgraph://` link would
-be declared by an app bundle's `Info.plist`, not the registry, and `--quit`
-uses a pid file and `SIGTERM`. Packaging it for the Mac isn't done yet.
+macOS 13 (Ventura) or later. It records through Apple's ScreenCaptureKit
+([`vocalgraph/appaudio_mac.py`](../vocalgraph/appaudio_mac.py)). There are two
+downloads: `VocalgraphHelper-<version>-mac-apple-silicon.dmg` for M1 and later,
+and `-mac-intel.dmg` for Intel Macs. The page picks the right one where the
+browser says which chip the Mac has, and offers the other beside it.
+
+### Install
+
+1. Open the `.dmg` and drag **Vocalgraph Helper** into **Applications**.
+2. **It isn't signed by Apple**, so macOS refuses to open it the first time.
+   Open it from Applications and choose **Done**. Then go to System Settings >
+   Privacy & Security, scroll down to "Vocalgraph Helper was blocked" and
+   choose **Open Anyway**, then **Open Anyway** again. macOS remembers this
+   for that copy. Opening it also registers the `vocalgraph://` link.
+3. The first time the page lists apps, macOS asks to let Vocalgraph Helper
+   record the screen and audio. ScreenCaptureKit records an app's sound as
+   part of a screen recording, so this is the permission it needs, but only
+   the sound is used: the video it has to take along is 2×2 pixels, once a
+   second, and is thrown away. Allow it in System Settings > Privacy &
+   Security > Screen & System Audio Recording.
+   - macOS gives a permission only to programs started after it's given, so
+     the helper quits when it finds it's missing. Reload the page and press
+     **Start the helper** once it's allowed.
+4. Each new version is a new unsigned program to macOS. After an update,
+   steps 2 and 3 may be needed again.
+
+Recent macOS versions also ask again now and then whether to keep allowing
+apps that record the screen.
+
+### Running it
+
+The app has no window, Dock icon or menu. Like the Windows version it quits
+after 10 minutes unused. Its log is `~/Library/Logs/Vocalgraph Helper/helper.log`.
+To stop it:
+
+```
+"/Applications/Vocalgraph Helper.app/Contents/MacOS/Vocalgraph Helper" --quit
+```
+
+Or use Activity Monitor. To uninstall, move the app to the Bin and delete the
+log folder. The link is declared in the app's `Info.plist`, so it goes with
+the app. `--quit` uses a pid file in the log folder, readable only by you,
+and `SIGTERM`.
+
+### Building
+
+On a Mac with [uv](https://docs.astral.sh/uv/) on PATH (or in `$UV`), from the
+repo root:
+
+```
+bash helper/build-mac.sh
+```
+
+This builds `helper/dist/Vocalgraph Helper.app` with PyInstaller
+(`vocalgraph-helper-mac.spec`). The bundle contains the standard library,
+numpy and PyObjC's ScreenCaptureKit, CoreMedia and libdispatch bindings, all
+from the `helper` dependency group in `uv.lock`. It then builds
+`helper/Output/VocalgraphHelper-<version>-mac-<chip>.dmg` and its `.sha256`.
+The chip is that of the Python running the build; the workflow builds one on
+an Apple Silicon runner and one on an Intel runner. `smoke-mac.sh` is the
+workflow's test: it copies the app out of the disk image, starts it by its
+link, checks `/version`, the origin checks, `/apps` and `--quit`.

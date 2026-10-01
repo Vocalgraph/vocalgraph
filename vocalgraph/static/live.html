@@ -447,6 +447,8 @@ async function loadSources() {
   const note = DEVICES.find(d => d.kind === 'notice');
   DEVICES = DEVICES.filter(d => d.kind !== 'notice');
   helperNote(note);
+  // The helper answered: it's installed, so Start never downloads it again here.
+  if (window.VG?.web && !note?.start) store.set('helper.seen', '1');
   let saved = [];
   try { saved = JSON.parse(store.get('live.sources') || '[]'); } catch {}
   $('sources').replaceChildren();
@@ -464,19 +466,41 @@ function helperNote(note) {
     b.addEventListener('click', async () => {
       b.disabled = true; b.textContent = 'Starting…';
       location.href = note.start;                           // the browser asks first
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 750));
+      // Not there after a few seconds, and never seen in this browser: it
+      // isn't installed, so its download starts (once), as Zoom's page does.
+      // Then keep looking for a while: the installer starts it when done.
+      let downloaded = false;
+      for (let i = 0; i < (downloaded ? 160 : 20); i++) {
+        await new Promise(r => setTimeout(r, downloaded ? 1500 : 750));
         const d = await api('/api/live/devices').catch(() => []);
         if (!d.some(x => x.kind === 'notice' && x.start)) { store.set('live.sources', JSON.stringify(sourceValues().filter(Boolean))); return loadSources(); }
+        if (i === 10 && !downloaded && note.auto && note.file && !store.get('helper.seen')) {
+          downloaded = true; i = 0;
+          getHelper(note);
+          box.firstChild.textContent = `Downloading the Vocalgraph Helper (${note.file})… Open it to install, and this page finds it. `;
+          b.textContent = 'Waiting for the helper…';
+        }
       }
       b.disabled = false; b.textContent = 'Start the helper';
     });
     box.append(b, document.createTextNode(' '));
   }
   if (note.download) {
-    const a = el('a', null, note.downloadText || 'Download the helper'); a.href = note.download; a.target = '_blank'; a.rel = 'noopener';
+    const a = el('a', null, note.downloadText || 'Download the helper'); a.href = note.download;
+    if (note.page) { a.target = '_blank'; a.rel = 'noopener'; }    // the release page, in a tab of its own
+    // else a file, which downloads without leaving this page
     box.append(a);
   }
+  if (note.other) {
+    const a = el('a', null, note.other.text); a.href = note.other.href;
+    box.append(document.createTextNode(' · '), a);
+  }
+}
+// The helper's installer, downloaded as if its link were clicked: GitHub
+// sends it as an attachment, so the page stays.
+function getHelper(note) {
+  const a = el('a'); a.href = note.download; a.hidden = true;
+  document.body.append(a); a.click(); a.remove();
 }
 function addSourceRow(value, first) {
   const row = el('div', 'source');

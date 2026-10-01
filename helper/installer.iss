@@ -66,6 +66,11 @@ Root: HKCU; Subkey: "Software\Classes\vocalgraph"; ValueType: string; ValueName:
 Root: HKCU; Subkey: "Software\Classes\vocalgraph\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"",0"
 Root: HKCU; Subkey: "Software\Classes\vocalgraph\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" --from-link ""%1"""
 
+[Run]
+; Started when the installer finishes (a ticked box on its last page), so
+; the Vocalgraph page that offered the download finds it straight away.
+Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall
+
 [UninstallRun]
 Filename: "{app}\{#AppExe}"; Parameters: "--quit"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "QuitHelper"
 

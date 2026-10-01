@@ -2,7 +2,7 @@
 
 A small local server on 127.0.0.1:8766 that lists the programs making sound
 and streams one of them to the page over a WebSocket. It captures through
-vocalgraph.appaudio (Windows process loopback; the Mac version is untested).
+vocalgraph.appaudio (Windows: process loopback; macOS 13+: ScreenCaptureKit).
 
   GET /version             -> {"name", "version", "protocol", "platform", "packaged"}
   GET /apps                -> [{"id", "name", "playing"}]
@@ -21,7 +21,9 @@ Run from the repo:          uv run python -m vocalgraph.helper
 Stop a running one:         ... --quit
 Installed (Windows), the installer registers the link to run
     "<install dir>\\Vocalgraph Helper.exe" --from-link "%1"
-and started with no arguments from there it behaves the same way.
+and started with no arguments from there it behaves the same way. On a Mac
+the app's Info.plist declares the link (helper/vocalgraph-helper-mac.spec),
+and macOS starts the app with no arguments.
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ PORT = 8766
 # at all. PROTOCOL only goes up when a change would break an older page.
 # VERSION is the one place the version is set: the exe's file version and the
 # installer's version are read from it.
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PROTOCOL = 1
 IDLE_MINUTES = 10
 SCHEME = "vocalgraph"
@@ -105,6 +107,7 @@ def log(*a) -> None:
 last_used = time.monotonic()
 capturing = 0
 _use_lock = threading.Lock()
+on_permission_needed = None             # set by main(): quits the helper
 
 
 def touch(delta: int = 0) -> None:
@@ -167,8 +170,22 @@ class H(BaseHTTPRequestHandler):
             return self._json(o, {"name": NAME, "version": VERSION, "protocol": PROTOCOL,
                                   "platform": sys.platform, "packaged": FROZEN})
         if url.path == "/apps":
-            self._json(o, appaudio.apps())
+            try:
+                apps = appaudio.apps()
+            except Exception as exc:          # shown greyed out in the page's list, not a broken helper
+                log("listing apps failed:", repr(exc))
+                apps = [{"id": "", "name": f"Apps: couldn't list them ({exc})", "playing": False, "disabled": True}]
+            self._json(o, apps)
             log("apps listed for", o)
+            if FROZEN and any(a.get("permission") for a in apps):
+                # The Mac's Screen Recording permission, not given yet. macOS
+                # applies it only to programs started after it's given, so
+                # quit: the page's Start button then starts a helper that has it.
+                with _use_lock:
+                    busy = capturing > 0
+                if not busy and on_permission_needed:
+                    log("no recording permission yet: quitting, to be started again once it's given")
+                    threading.Timer(1.0, on_permission_needed).start()
             return
         if url.path == "/capture" and self.headers.get("Upgrade", "").lower() == "websocket":
             return self._capture(parse_qs(url.query).get("app", [""])[0], o)
@@ -430,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
         if not quitting.is_set():
             quitting.set()
             server.shutdown()
+    global on_permission_needed
+    on_permission_needed = stop
     signal_ = QuitSignal(stop)
     log(f"{NAME} {VERSION} on 127.0.0.1:{PORT}{' (started from a link)' if from_link else ''}, allowed:",
         sorted(ALLOWED), f"; quits after {args.idle_minutes:g} min unused" if args.idle_minutes else "")

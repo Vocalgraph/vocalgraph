@@ -1,10 +1,11 @@
 # Builds the Vocalgraph Helper for Windows (PyInstaller exe + Inno Setup
-# installer), smoke-tests it, and uploads the installer and its SHA-256 file.
-# A tag helper-v<VERSION> (VERSION as in vocalgraph/helper.py) also publishes
-# them as a GitHub Release. Toolchain versions are read from the repo, never
-# written here: uv from scripts/uv-env.cmd, Python from .python-version,
-# PyInstaller from uv.lock, Inno Setup from helper/innosetup.version. Actions
-# are pinned to exact commits.
+# installer) and macOS (the app in a disk image, one per chip type),
+# smoke-tests each, and uploads them with their SHA-256 files. A tag
+# helper-v<VERSION> (VERSION as in vocalgraph/helper.py) also publishes them
+# as a GitHub Release. Toolchain versions are read from the repo, never
+# written here: uv from scripts/uv-env.cmd / uv-env.sh, Python from
+# .python-version, PyInstaller (and the Mac's numpy and PyObjC) from uv.lock,
+# Inno Setup from helper/innosetup.version. Actions are pinned to exact commits.
 name: Helper
 
 on:
@@ -16,7 +17,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     defaults:
       run:
@@ -92,35 +93,103 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: vocalgraph-helper-${{ steps.versions.outputs.helper }}
+          name: vocalgraph-helper-windows-${{ steps.versions.outputs.helper }}
           path: |
             helper/Output/*.exe
             helper/Output/*.sha256
           if-no-files-found: error
 
+  mac:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15          # Apple Silicon
+            chip: apple-silicon
+          - runner: macos-15-intel
+            chip: intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pinned versions
+        id: versions
+        run: |
+          uv=$(sed -nE 's/^UV_VERSION="([0-9.]+)"/\1/p' scripts/uv-env.sh)
+          helper=$(sed -nE 's/^VERSION = "([0-9.]+)"/\1/p' vocalgraph/helper.py)
+          if [ -z "$uv" ] || [ -z "$helper" ]; then echo "couldn't read a version: uv '$uv', helper '$helper'"; exit 1; fi
+          echo "uv=$uv" >> "$GITHUB_OUTPUT"
+          echo "helper=$helper" >> "$GITHUB_OUTPUT"
+          echo "uv $uv, helper $helper"
+
+      - name: The tag matches the helper's version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.versions.outputs.helper }}
+        run: |
+          if [ "$TAG" != "helper-v$VERSION" ]; then echo "tag $TAG doesn't match VERSION $VERSION in vocalgraph/helper.py"; exit 1; fi
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ steps.versions.outputs.uv }}
+          enable-cache: false
+
+      - name: Install Python (from .python-version)
+        run: uv python install
+
+      - name: Build the app and the disk image
+        run: bash helper/build-mac.sh
+
+      - name: Smoke test
+        env:
+          VERSION: ${{ steps.versions.outputs.helper }}
+          CHIP: ${{ matrix.chip }}
+        run: bash helper/smoke-mac.sh "helper/Output/VocalgraphHelper-$VERSION-mac-$CHIP.dmg" "$VERSION"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vocalgraph-helper-mac-${{ matrix.chip }}-${{ steps.versions.outputs.helper }}
+          path: |
+            helper/Output/*.dmg
+            helper/Output/*.sha256
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/helper-v')
-    needs: build
+    needs: [windows, mac]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: vocalgraph-helper-${{ needs.build.outputs.version }}
+          pattern: vocalgraph-helper-*-${{ needs.windows.outputs.version }}
+          merge-multiple: true
           path: dist
-      - name: Check the checksum
+      - name: Check the checksums
         working-directory: dist
-        run: sha256sum -c *.sha256
+        run: |
+          ls -la
+          test "$(ls *.sha256 | wc -l)" -eq 3
+          sha256sum -c *.sha256
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          name: Vocalgraph Helper ${{ needs.build.outputs.version }}
+          name: Vocalgraph Helper ${{ needs.windows.outputs.version }}
           files: |
             dist/*.exe
+            dist/*.dmg
             dist/*.sha256
           fail_on_unmatched_files: true
           body: |
-            Vocalgraph Helper ${{ needs.build.outputs.version }} for Windows 10 (2004) and later.
-            Run `VocalgraphHelperSetup-${{ needs.build.outputs.version }}.exe`; no administrator rights needed.
+            Lets the Vocalgraph page (https://vocalgraph.github.io/vocalgraph/) record one program's sound.
+
+            **Windows 10 (2004) and later:** run `VocalgraphHelperSetup-${{ needs.windows.outputs.version }}.exe`; no administrator rights needed.
             It isn't code-signed, so Windows SmartScreen warns first: choose "More info", then "Run anyway".
-            Check the download against the `.sha256` file beside it.
+
+            **macOS 13 and later:** `VocalgraphHelper-${{ needs.windows.outputs.version }}-mac-apple-silicon.dmg` for M1 and later, `-mac-intel.dmg` for Intel Macs.
+            Open it and drag Vocalgraph Helper into Applications. It isn't signed by Apple, so macOS refuses to open it the first time:
+            open it once and choose Done, then System Settings > Privacy & Security > "Open Anyway".
+
+            Check a download against the `.sha256` file beside it.

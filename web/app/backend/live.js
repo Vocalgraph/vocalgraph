@@ -14,8 +14,16 @@ import { loadModels } from './models.js';
 import { loadSmile } from '../smile/smile.js';
 
 const HELPER = 'http://127.0.0.1:8766', HELPER_WS = 'ws://127.0.0.1:8766';
-const HELPER_PROTOCOL = 1, HELPER_LATEST = '0.3.0';
-const DOWNLOAD = 'https://github.com/Vocalgraph/vocalgraph/releases/latest';
+const HELPER_PROTOCOL = 1, HELPER_LATEST = '0.4.0';
+// The release of HELPER_LATEST exactly (not "latest", which could one day be
+// another kind of release), and its files for each system.
+const RELEASE = `https://github.com/Vocalgraph/vocalgraph/releases/tag/helper-v${HELPER_LATEST}`;
+const FILES = `https://github.com/Vocalgraph/vocalgraph/releases/download/helper-v${HELPER_LATEST}/`;
+const DOWNLOADS = {
+  windows: { file: `VocalgraphHelperSetup-${HELPER_LATEST}.exe`, label: 'for Windows' },
+  'mac-apple-silicon': { file: `VocalgraphHelper-${HELPER_LATEST}-mac-apple-silicon.dmg`, label: 'for Mac', other: 'Apple Silicon Mac?' },
+  'mac-intel': { file: `VocalgraphHelper-${HELPER_LATEST}-mac-intel.dmg`, label: 'for Intel Mac', other: 'Intel Mac?' },
+};
 const FORMATS = ['m4a', 'flac'];
 
 let live = null;            // { id, status, error, label, kind, format, session, inputs, names, warnings, job, started, dir }
@@ -42,17 +50,35 @@ export function message(ev) {
 // --- the helper ------------------------------------------------------------------------
 const newer = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+let system = null;          // from the page, once: { os, chip }
+// The download for this computer: {download, downloadText, file, other?}. A
+// computer it can't tell gets the release page, with every download on it.
+async function download(text) {
+  system ||= await page('system').catch(() => ({}));
+  const key = system.os === 'windows' ? 'windows' : system.os === 'mac' ? `mac-${system.chip}` : null;
+  if (!DOWNLOADS[key]) return { download: RELEASE, downloadText: text || 'Download the helper (Windows or Mac)', page: true };
+  const d = DOWNLOADS[key];
+  const out = { download: FILES + d.file, downloadText: text || `Download the helper ${d.label}`, file: d.file };
+  if (system.os === 'mac') {
+    const o = DOWNLOADS[key === 'mac-intel' ? 'mac-apple-silicon' : 'mac-intel'];
+    out.other = { href: FILES + o.file, text: o.other };
+  }
+  return out;
+}
 async function helper() {
   try {
     const v = await (await fetch(HELPER + '/version', { signal: AbortSignal.timeout(1500) })).json();
-    if ((v.protocol || 0) < HELPER_PROTOCOL) return { notice: { kind: 'notice', text: `The Vocalgraph helper on this computer (${v.version}) is too old for this page.`, download: DOWNLOAD, downloadText: 'Download the new helper' } };
-    const apps = await (await fetch(HELPER + '/apps', { signal: AbortSignal.timeout(5000) })).json();
+    if ((v.protocol || 0) < HELPER_PROTOCOL) return { notice: { kind: 'notice', text: `The Vocalgraph helper on this computer (${v.version}) is too old for this page.`, ...await download('Download the new helper') } };
+    // A Mac being asked for the recording permission waits for macOS (up to 10 s).
+    const apps = await (await fetch(HELPER + '/apps', { signal: AbortSignal.timeout(15000) })).json();
     const notice = newer(HELPER_LATEST, v.version)
-      ? { kind: 'notice', text: `A newer Vocalgraph helper (${HELPER_LATEST}) is available.`, download: DOWNLOAD, downloadText: 'Download it' } : null;
+      ? { kind: 'notice', text: `A newer Vocalgraph helper (${HELPER_LATEST}) is available.`, ...await download('Download it') } : null;
     return { apps: apps.map(a => ({ ...a, kind: 'app' })), notice };
   } catch {
+    // auto: the page may start this download itself when Start finds no
+    // helper, if it has never seen one in this browser.
     return { notice: { kind: 'notice', text: "To record one program's sound (a call, a video), Vocalgraph needs its small helper app on this computer.",
-      start: 'vocalgraph://start', download: DOWNLOAD } };
+      start: 'vocalgraph://start', auto: true, ...await download() } };
   }
 }
 

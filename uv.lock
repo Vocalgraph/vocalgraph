@@ -704,7 +704,11 @@ dependencies = [
 
 [package.dev-dependencies]
 helper = [
+    { name = "numpy", marker = "sys_platform == 'darwin'" },
     { name = "pyinstaller" },
+    { name = "pyobjc-framework-coremedia", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-libdispatch", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-screencapturekit", marker = "sys_platform == 'darwin'" },
 ]
 
 [package.metadata]
@@ -722,7 +726,13 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-helper = [{ name = "pyinstaller", specifier = "==6.22.3" }]
+helper = [
+    { name = "numpy", marker = "sys_platform == 'darwin'" },
+    { name = "pyinstaller", specifier = "==6.22.3" },
+    { name = "pyobjc-framework-coremedia", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-libdispatch", marker = "sys_platform == 'darwin'" },
+    { name = "pyobjc-framework-screencapturekit", marker = "sys_platform == 'darwin'" },
+]
 
 [[package]]
 name = "waitress"
