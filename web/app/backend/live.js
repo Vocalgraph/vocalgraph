@@ -29,6 +29,12 @@ const FORMATS = ['m4a', 'flac'];
 let live = null;            // { id, status, error, label, kind, format, session, inputs, names, warnings, job, started, dir }
 let lastJob = new Map();    // live id -> library job id
 
+// The speaker models and openSMILE, loaded once per page: they take a few
+// seconds the first time, so the Live page starts this as soon as it lists
+// the inputs, and recording doesn't wait for it.
+let warming = null;
+const warm = () => (warming ||= Promise.all([loadModels(), loadSmile()]).catch((e) => { warming = null; throw e; }));
+
 // --- the page (microphones) ---------------------------------------------------------
 let calls = 0;
 const pending = new Map();
@@ -85,6 +91,7 @@ async function helper() {
 // --- routes ---------------------------------------------------------------------------
 export async function get(what, req) {
   if (what === 'devices') {
+    warm().catch(() => {});
     const [mics, h] = await Promise.all([page('mics').catch(() => []), helper()]);
     return json([...mics, ...(h.apps || []), ...(h.notice ? [h.notice] : [])]);
   }
@@ -104,6 +111,9 @@ async function state() {
   const out = s.state({ id: live.id, status: live.status, error: live.error || s.error || null, label: live.label, kind: live.kind,
     format: live.format, warnings: live.warnings });
   if (live.inputs) out.input_stats = live.inputs.list.map(i => ({ name: i.name, channels: i.channels, ...(i.stats || {}) }));
+  out.preparing = s.preparing && live.status === 'live';
+  // Microphones giving no sound: while recording, and as they were at the end.
+  out.silent = live.inputs && live.status === 'live' ? live.inputs.silent() : live.silent || [];
   const jid = lastJob.get(live.id);
   if (jid) {
     const meta = await store.jobs.get(jid);
@@ -149,16 +159,15 @@ const newId = () => [...crypto.getRandomValues(new Uint8Array(6))].map(b => b.to
 async function start(body) {
   if (live && ['starting', 'live', 'stopping', 'finishing'].includes(live.status)) return error(409, 'A live session is already running.');
   const fmt = FORMATS.includes(body.format) ? body.format : 'm4a';
-  const [models, smile] = await Promise.all([loadModels(), loadSmile()]);
   const id = newId();
-  if (body.replay) return startReplay(id, String(body.replay), fmt, models, smile, body);
+  if (body.replay) { const [models, smile] = await warm(); return startReplay(id, String(body.replay), fmt, models, smile, body); }
   const devs = (body.devices || (body.device ? [{ id: body.device, name: body.device_name }] : []))
     .filter(d => d && d.id).slice(0, 8);
   if (!devs.length) return error(400, 'Choose a microphone.');
   // The computer's sound (page.js) gets a short name for its track.
   const names = devs.map(d => d.id === 'system:' ? 'Computer sound' : String(d.name || d.id));
   const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(`live-${id}`, { create: true });
-  const session = new Session({ tracks: devs.length > 1 ? devs.length : 0, names, models, smile });
+  const session = new Session({ tracks: devs.length > 1 ? devs.length : 0, names });
   session.numSpeakers = body.num_speakers ? parseInt(body.num_speakers, 10) : null;
   const inputs = new Inputs(dir, (mix, ins) => { session.feed(mix, ins); if (live?.status === 'starting') live.status = 'live'; });
   live = { id, status: 'starting', error: null, label: names.join(' + '), kind: 'device', format: fmt, session, inputs, names,
@@ -177,6 +186,9 @@ async function start(body) {
       }
     }
     inputs.begin();
+    const L = live;
+    L.ready = warm().then(([models, smile]) => session.ready(models, smile))
+      .catch((e) => { L.warnings.push(`The analysis couldn't start (${e.message || e}); the sound is still being recorded.`); });
   } catch (e) {
     await teardown();
     live.status = 'error'; live.error = e.message || String(e);
@@ -218,7 +230,7 @@ function stop() {
   if (!live || !['starting', 'live'].includes(live.status)) return;
   live.status = 'stopping';
   if (live.timer) clearInterval(live.timer);
-  if (live.inputs) { live.inputs.stop(); for (const inp of live.inputs.list) inp.close?.(); }
+  if (live.inputs) { live.silent = live.inputs.silent(); live.inputs.stop(); for (const inp of live.inputs.list) inp.close?.(); }
   live.session.end();
   live.status = 'finishing';
   finish(live).catch(e => { live.status = 'error'; live.error = e.message || String(e); console.error(e); });
@@ -243,6 +255,7 @@ async function discard() {
 // recording, and file it in the library.
 async function finish(L) {
   const s = L.session;
+  await L.ready;                          // stopped before the models had loaded: analyse it all now
   const settled = async () => { do await new Promise(r => setTimeout(r, 50)); while (s.busy); };
   await settled();                        // the last windows and voice blocks (end() started them)
   s.askRegroup = true; s.kick();
@@ -263,7 +276,7 @@ async function finish(L) {
       const f = await (await L.dir.getFileHandle(`input${i}.s16`)).getFile();
       tracks.push({ data: new Uint8Array(await f.arrayBuffer()), channels: inp.channels, name: inp.name });
     }
-    ({ blob, ext } = await ff.encodeLive(tracks, IN_RATE, L.format));
+    ({ blob, ext } = await ff.encodeLive(tracks, IN_RATE, L.format, `Vocalgraph live: ${L.inputs.summary()}`));
   }
   const name = (L.kind === 'device' ? `Live ${when}` : L.label) + ext;
   // The saved file can start slightly later than the live stream (AAC's
@@ -277,6 +290,7 @@ async function finish(L) {
                      files: { voice_frames: a.frames } };
   } catch (e) { console.warn('live analysis not kept:', e); }
   if (s.tracks) extra.tracks = [...L.names];
+  if (L.inputs) extra.live_inputs = L.inputs.summary();
   const job = await jobs.register(blob, name, null, extra);
   lastJob.set(L.id, job.id);
   await teardown();

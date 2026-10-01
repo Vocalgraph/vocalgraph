@@ -119,6 +119,8 @@
   .btn.quiet { background: transparent; border-color: var(--border); color: var(--text-secondary); }
   .btn:disabled { opacity: .5; cursor: default; }
   .error { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 12px; margin: 0 0 14px; }
+  .silent { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 12px 14px; margin: 10px 0 4px; }
+  .silent p { margin: 0; } .silent p + p, .silent ul { margin-top: 6px; } .silent ul { margin-bottom: 0; padding-left: 20px; }
   .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
   .status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin-bottom: 14px; }
   .rec { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-variant-numeric: tabular-nums; font-size: 20px; }
@@ -259,6 +261,7 @@
       <span class="meter" id="meter" title="Input level"><div></div></span>
       <span class="facts" id="facts"></span>
     </div>
+    <div class="silent" id="silentWarn" role="alert" hidden></div>
     <div class="actions" id="liveActions">
       <button class="btn stop" id="stop">Stop and save</button>
       <button class="btn quiet" id="discard">Discard</button>
@@ -807,11 +810,14 @@ function render() {
   if (S.status === 'starting') facts.push('Starting…');
   if (S.status === 'live') {
     facts.push(S.label);
-    if (S.speakers_behind > 5) facts.push(`speakers ${Math.round(S.speakers_behind)} s behind`);
+    if (S.preparing) facts.push('getting the analysis ready (recording already)');
+    // Before the first 10 s, speakers are waiting for enough sound, not behind.
+    else if (S.speakers_behind > 5 && S.duration > 15) facts.push(`speakers ${Math.round(S.speakers_behind)} s behind`);
   }
   if (S.status === 'stopping' || S.status === 'finishing') facts.push('Finishing the last few seconds…');
   if (S.warnings && S.warnings.length) facts.push(...S.warnings);
   $('facts').textContent = facts.join(' · ');
+  renderSilent();
   $('liveActions').hidden = !running();
   $('stop').disabled = S.status !== 'live' && S.status !== 'starting';
   if (document.activeElement !== $('count')) $('count').value = S.num_speakers ?? '';
@@ -828,6 +834,40 @@ function render() {
 }
 let lastIdle = null;
 function applyLayoutQuiet(idle) { if (idle !== lastIdle) { lastIdle = idle; applyLayout(); } }
+
+// A microphone giving no sound at all. Real microphones always pick up some
+// hiss, so pure silence means it's muted or taken, and nothing at all means
+// the browser has stopped passing it on.
+const WINDOWS = /Windows/.test(navigator.userAgent);
+function renderSilent() {
+  const box = $('silentWarn'), list = S.silent || [];
+  const key = list.map(m => m.kind + m.name).join('|') + running();
+  box.hidden = !list.length;
+  if (!list.length) { box.dataset.key = ''; return; }
+  const when = (m) => running() ? `for ${m.secs} s now` : `for its last ${m.secs} s`;
+  if (box.dataset.key !== key) {
+    box.dataset.key = key; box.replaceChildren();
+    const m = list[0], zeros = m.kind === 'zeros';
+    box.append(el('p', '', zeros
+      ? `No sound at all from ${m.name} ${when(m)}: not even background hiss, so the microphone is sending pure silence. If you're speaking, check:`
+      : `No sound is reaching Vocalgraph from ${m.name} ${when(m)}. The browser opened it but isn't passing any sound on. Stop, reload this page and start again; if it keeps happening, restart the browser.`));
+    if (zeros) {
+      const ul = el('ul');
+      for (const t of [
+        'Its mute button (a Blue Yeti blinks red when muted).',
+        WINDOWS ? 'Its input volume isn’t at 0: Windows Settings > System > Sound > Input.' : 'Its input volume isn’t at 0: System Settings > Sound > Input.',
+        WINDOWS ? 'Another program (Discord, Zoom, Teams…) hasn’t taken it over: Sound settings > More sound settings > Recording > the microphone > Properties > Advanced, untick “Allow applications to take exclusive control”, then restart that program and this browser.'
+                : 'Another program (Discord, Zoom, Teams…) hasn’t taken it over: quit it, or choose this microphone in its settings again.',
+        'That this is the right microphone: Stop, and pick another one.',
+      ]) ul.append(el('li', '', t));
+      box.append(ul);
+    }
+    if (list.length > 1) box.append(el('p', '', `Also silent: ${list.slice(1).map(x => x.name).join(', ')}.`));
+  }
+  // Keep the seconds counting without rebuilding the list.
+  const m = list[0], lead = box.firstChild;
+  lead.textContent = lead.textContent.replace(/for (its last )?\d+ s( now)?/, when(m));
+}
 
 function renderSaved() {
   const box = $('saved'), j = S.job;

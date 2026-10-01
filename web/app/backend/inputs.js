@@ -59,15 +59,22 @@ const mono = (data, ch) => {
 class Input {
   constructor(id, name, channels, file) {
     Object.assign(this, { id, name, channels, file, written: 0, pending: [], pendingFrames: 0, error: null, ended: false });
+    // For the session's diagnostics: what arrives and where it lands.
+    this.stats = { chunks: 0, peak: 0, padded: 0, trimmed: 0, lastAt: 0, lastHave: 0, sound: 0, zeros: 0, lastArrive: 0, lastSound: 0 };
   }
   // Frames of `data` (interleaved float32 at 48 kHz) whose first sample is at
   // `at` frames on the session clock.
   place(data, at) {
     const ch = this.channels, frames = data.length / ch;
-    // For the session's diagnostics: what arrives and where it lands.
-    this.stats ??= { chunks: 0, peak: 0, padded: 0, trimmed: 0, lastAt: 0, lastHave: 0 };
+    // A real microphone always has some hiss: exact zeros mean it's muted, or
+    // something else has it (lastSound); nothing arriving at all means the
+    // browser isn't passing it on (lastArrive). Both on the session clock.
     this.stats.chunks++; this.stats.lastAt = Math.round(at); this.stats.lastHave = Math.round(this.written + this.pendingFrames);
-    for (let i = 0; i < data.length; i++) { const v = Math.abs(data[i]); if (v > this.stats.peak) this.stats.peak = v; }
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) { const v = Math.abs(data[i]); if (v > peak) peak = v; }
+    if (peak > this.stats.peak) this.stats.peak = peak;
+    this.stats.lastArrive = Math.round(at + frames);
+    if (peak > 0) { this.stats.sound += frames; this.stats.lastSound = Math.round(at + frames); } else this.stats.zeros += frames;
     const ahead = this.written + this.pendingFrames - at;   // > 0: we already have audio past `at`
     if (-ahead > SLACK) { this.stats.padded += Math.round(-ahead); this.add(new Float32Array(Math.round(-ahead) * ch)); }  // a gap: silence
     if (ahead > SLACK) { const cut = Math.min(frames, Math.round(ahead)); this.stats.trimmed += cut; data = data.subarray(cut * ch); }
@@ -150,7 +157,11 @@ export class Inputs {
     const clock = (this.now() - this.start) / 1000 * RATE;
     for (const inp of this.list) {
       const have = inp.written + inp.pendingFrames;
-      if (clock - have > STALL) inp.add(new Float32Array(Math.round(clock - have - SLACK) * inp.channels));
+      if (clock - have > STALL) {
+        const gap = Math.round(clock - have - SLACK);
+        inp.add(new Float32Array(gap * inp.channels));
+        inp.stats.padded += gap;
+      }
     }
     while (this.list.every(i => i.pendingFrames >= BLOCK)) this.block(BLOCK);
   }
@@ -166,6 +177,31 @@ export class Inputs {
       inputs16.push(this.decs[k].push(m));
     });
     this.onBlock(this.mixDec.push(mix48), this.list.length > 1 ? inputs16 : null);
+  }
+
+  // Microphones giving no sound for `after` seconds or more, as
+  // [{name, kind, secs}]: kind 'zeros' (pure silence arriving: muted, or
+  // another program has it) or 'none' (nothing arriving at all). A program's
+  // or the computer's sound is left out: those are often silent.
+  silent(after = 3) {
+    if (this.start == null) return [];
+    const clock = (this.now() - this.start) / 1000 * RATE, out = [];
+    for (const inp of this.list) {
+      if (!String(inp.id).startsWith('mic:')) continue;
+      const s = inp.stats, none = (clock - s.lastArrive) / RATE, quiet = (clock - s.lastSound) / RATE;
+      if (none >= after) out.push({ name: inp.name, kind: 'none', secs: Math.round(none) });
+      else if (quiet >= after) out.push({ name: inp.name, kind: 'zeros', secs: Math.round(quiet) });
+    }
+    return out;
+  }
+
+  // For the saved file, without device names: what each input gave, in seconds.
+  summary() {
+    const sec = (f) => (f / RATE).toFixed(1);
+    return this.list.map((inp, i) => {
+      const s = inp.stats, kind = String(inp.id).split(':')[0] || 'input';
+      return `input ${i + 1} (${kind}): ${sec(s.sound)} s sound, ${sec(s.zeros)} s pure silence, ${sec(s.padded)} s nothing arrived`;
+    }).join('; ');
   }
 
   // Stop: send what's left, close the files.
