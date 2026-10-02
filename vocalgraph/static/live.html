@@ -890,7 +890,7 @@ function renderSaved() {
     const open = link('Open in Recordings', Nav.recordingsHref(j.id), 'secondary');
     open.addEventListener('click', () => { open.href = Nav.recordingsHref(j.id); Nav.rememberJob(j.id); });
   } else {
-    $('savedText').textContent = 'The recording was saved, but trimming it failed: ' + (j.error || 'unknown error');
+    $('savedText').textContent = 'The recording was saved, but it couldn’t be trimmed: ' + (j.error || 'something went wrong.');
     $('savedBar').hidden = true;
     link(`Download full recording (${fmt})`, `api/jobs/${j.id}/original`, 'secondary');
   }

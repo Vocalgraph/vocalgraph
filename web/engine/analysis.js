@@ -195,7 +195,10 @@ export function analyze(x, { minSilence = 0.8, pad = 0.15, tolerance = 0.0, star
 
   say('Measuring loudness');
   const win = windowDb(x);
-  const split = otsu(win.filter((v) => v > -120.0));
+  const heard = win.filter((v) => v > -120.0);
+  // Pure digital silence (a muted microphone, say): no level to cut at.
+  if (heard.length < 2) throw new Error("This recording is completely silent, so there's nothing to trim or chart. If it should have sound, the microphone was probably muted, turned down to 0, or in use by another program (such as Discord) while it was recording.");
+  const split = otsu(heard);
   const below = win.filter((v) => v <= split), above = win.filter((v) => v > split);
   const floor = median(below);
   const level = above.length ? median(above) : split;
