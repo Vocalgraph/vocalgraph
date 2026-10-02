@@ -33,7 +33,15 @@ let lastJob = new Map();    // live id -> library job id
 // seconds the first time, so the Live page starts this as soon as it lists
 // the inputs, and recording doesn't wait for it.
 let warming = null;
-const warm = () => (warming ||= Promise.all([loadModels(), loadSmile()]).catch((e) => { warming = null; throw e; }));
+const warm = () => {
+  if (!warming) {
+    const again = (e) => { warming = null; throw e; };
+    warming = { smile: loadSmile().catch(again), models: loadModels().catch(again) };
+    warming.both = Promise.all([warming.models, warming.smile]);
+    warming.both.catch(() => {});
+  }
+  return warming;
+};
 
 // --- the page (microphones) ---------------------------------------------------------
 let calls = 0;
@@ -91,7 +99,7 @@ async function helper() {
 // --- routes ---------------------------------------------------------------------------
 export async function get(what, req) {
   if (what === 'devices') {
-    warm().catch(() => {});
+    warm();
     const [mics, h] = await Promise.all([page('mics').catch(() => []), helper()]);
     return json([...mics, ...(h.apps || []), ...(h.notice ? [h.notice] : [])]);
   }
@@ -160,7 +168,7 @@ async function start(body) {
   if (live && ['starting', 'live', 'stopping', 'finishing'].includes(live.status)) return error(409, 'A live session is already running.');
   const fmt = FORMATS.includes(body.format) ? body.format : 'm4a';
   const id = newId();
-  if (body.replay) { const [models, smile] = await warm(); return startReplay(id, String(body.replay), fmt, models, smile, body); }
+  if (body.replay) { const [models, smile] = await warm().both; return startReplay(id, String(body.replay), fmt, models, smile, body); }
   const devs = (body.devices || (body.device ? [{ id: body.device, name: body.device_name }] : []))
     .filter(d => d && d.id).slice(0, 8);
   if (!devs.length) return error(400, 'Choose a microphone.');
@@ -187,7 +195,10 @@ async function start(body) {
     }
     inputs.begin();
     const L = live;
-    L.ready = warm().then(([models, smile]) => session.ready(models, smile))
+    const w = warm();
+    w.smile.then((smile) => session.useSmile(smile), () => {});
+    w.models.then((models) => session.useModels(models), () => {});
+    L.ready = w.both.then(() => {})
       .catch((e) => { L.warnings.push(`The analysis couldn't start (${e.message || e}); the sound is still being recorded.`); });
   } catch (e) {
     await teardown();

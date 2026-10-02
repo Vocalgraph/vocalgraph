@@ -214,7 +214,11 @@ def analyze(path: str, min_silence: float = 0.8, pad: float = 0.15,
 
     say("Measuring loudness")
     win = window_db(x)
-    split = otsu(win[win > -120.0])
+    heard = win[win > -120.0]
+    # Pure digital silence (a muted microphone, say): no level to cut at.
+    if heard.size < 2:
+        raise ValueError("This recording is completely silent, so there's nothing to trim or chart. If it should have sound, the microphone was probably muted, turned down to 0, or in use by another program (such as Discord) while it was recording.")
+    split = otsu(heard)
     floor = float(np.median(win[win <= split]))
     level = float(np.median(win[win > split])) if (win > split).any() else split
     audible = audible_level(floor, level)

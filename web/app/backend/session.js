@@ -90,9 +90,11 @@ export class Session {
   get n() { return this.x.n; }
 
   // Recording can start before the models are loaded: the sound is kept, and
-  // the analysis catches up once they're here.
-  ready(models, smile) { this.models = models; this.smile = smile; this.kick(); }
-  get preparing() { return !this.models || !this.smile; }
+  // the analysis catches up as each arrives (openSMILE, which is small, for
+  // the voice measures; the speaker models, which are large, for who speaks).
+  useSmile(smile) { this.smile = smile; this.kick(); }
+  useModels(models) { this.models = models; this.kick(); }
+  get preparing() { return !this.smile; }
 
   // 16 kHz mono blocks from inputs.js: the mix, and each input when several.
   feed(mix, inputs) {
@@ -116,9 +118,9 @@ export class Session {
   }
 
   async step() {
-    if (this.preparing) return;
+    if (!this.smile) return;
     // speakers: every complete 10 s window
-    while (this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
+    while (this.models && this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
     // voice: every complete 0.1 s block (the last part once the input ends)
     const block = Math.round(VOICE_BLOCK * RATE), after = Math.round(VOICE_AFTER * RATE);
     while (this.n >= this.voiceAt + block + after || (this.ended && this.n - this.voiceAt >= Math.round(0.03 * RATE))) {
