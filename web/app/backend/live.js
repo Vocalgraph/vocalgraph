@@ -1,17 +1,16 @@
 // Live in the browser: the /api/live/... routes of vocalgraph/server.py, with
 // microphones opened by the page (page.js), programs' sound from the local
-// helper, the inputs kept in step (inputs.js), the analysis (session.js), and
-// the recording filed in the library when it stops, with its voiceprints and
-// voice frames so the library doesn't analyse it again.
+// helper, the inputs kept in step (inputs.js), the analysis (session.js, in a
+// worker of its own: analyser.js), and the recording filed in the library
+// when it stops, with its voiceprints and voice frames so the library doesn't
+// analyse it again.
 import { json, error } from './http.js';
 import * as store from './store.js';
 import * as jobs from './jobs.js';
 import * as E from '../engine/index.js';
 import * as ff from '../engine/ffmpeg-ops.js';
 import { Inputs, RATE as IN_RATE } from './inputs.js';
-import { Session } from './session.js';
-import { loadModels } from './models.js';
-import { loadSmile } from '../smile/smile.js';
+import { Analyser } from './analyser.js';
 
 const HELPER = 'http://127.0.0.1:8766', HELPER_WS = 'ws://127.0.0.1:8766';
 const HELPER_PROTOCOL = 1, HELPER_LATEST = '0.4.0';
@@ -26,21 +25,20 @@ const DOWNLOADS = {
 };
 const FORMATS = ['m4a', 'flac'];
 
-let live = null;            // { id, status, error, label, kind, format, session, inputs, names, warnings, job, started, dir }
+let live = null;            // { id, status, error, label, kind, format, analyser, inputs, names, warnings, job, started, dir }
 let lastJob = new Map();    // live id -> library job id
 
-// The speaker models and openSMILE, loaded once per page: they take a few
-// seconds the first time, so the Live page starts this as soon as it lists
-// the inputs, and recording doesn't wait for it.
-let warming = null;
+// The analysis worker, with the speaker models and openSMILE, made once per
+// page: they take a few seconds to load the first time, so the Live page
+// starts this as soon as it lists the inputs, and recording doesn't wait for
+// it. One that failed is replaced the next time, unless a session still uses it.
+let analyser = null;
 const warm = () => {
-  if (!warming) {
-    const again = (e) => { warming = null; throw e; };
-    warming = { smile: loadSmile().catch(again), models: loadModels().catch(again) };
-    warming.both = Promise.all([warming.models, warming.smile]);
-    warming.both.catch(() => {});
+  if (!analyser || (analyser.failed && live?.analyser !== analyser)) {
+    analyser?.worker.terminate();
+    analyser = new Analyser();
   }
-  return warming;
+  return analyser;
 };
 
 // --- the page (microphones) ---------------------------------------------------------
@@ -105,21 +103,22 @@ export async function get(what, req) {
   }
   if (!live) return what === 'state' ? json({ status: 'idle' }) : error(404, 'No live session.');
   if (what === 'state') return json(await state());
-  if (what === 'frames') return json(live.session.frames(parseInt(req.query.get('from') || '0', 10)));
+  if (what === 'frames') return json(await live.analyser.call('frames', { from: parseInt(req.query.get('from') || '0', 10) }));
   if (what === 'voice') {
     let spk = req.query.get('spk') || 'all'; if (spk !== 'all') spk = parseInt(spk, 10);
     const points = Math.max(100, Math.min(20000, parseInt(req.query.get('points') || String(E.MAX_POINTS), 10) || E.MAX_POINTS));
-    return json(live.session.voiceFor(spk, points, req.query.get('gate') === '1'));
+    return json(await live.analyser.call('voice', { spk, points, gate: req.query.get('gate') === '1' }));
   }
   return error(404, 'Not found.');
 }
 
 async function state() {
-  const s = live.session;
-  const out = s.state({ id: live.id, status: live.status, error: live.error || s.error || null, label: live.label, kind: live.kind,
-    format: live.format, warnings: live.warnings });
+  const extra = { id: live.id, status: live.status, error: live.error || null, label: live.label, kind: live.kind,
+    format: live.format, warnings: live.warnings };
+  let out;
+  try { out = await live.analyser.call('state', { extra }); }
+  catch (e) { out = { ...extra, error: extra.error || e.message, duration: live.analyser.n / 16000 }; }
   if (live.inputs) out.input_stats = live.inputs.list.map(i => ({ name: i.name, channels: i.channels, ...(i.stats || {}) }));
-  out.preparing = s.preparing && live.status === 'live';
   // Microphones giving no sound: while recording, and as they were at the end.
   out.silent = live.inputs && live.status === 'live' ? live.inputs.silent() : live.silent || [];
   const jid = lastJob.get(live.id);
@@ -148,15 +147,17 @@ export async function post(what, req) {
     if ('num_speakers' in body) {
       let n = body.num_speakers; n = n === null || n === '' || n === 0 ? null : parseInt(n, 10);
       if (n !== null && !(n >= 1 && n <= 20)) return error(400, 'Number of speakers must be between 1 and 20.');
-      live.session.numSpeakers = n; live.session.askRegroup = true; live.session.kick();
+      await live.analyser.call('speakers', { n });
     }
     return json({ ok: true });
   }
   if (what === 'names') {
     if (!live) return error(404, 'No live session.');
-    for (const [k, v] of Object.entries(body)) { const n = parseInt(k, 10); if (!Number.isNaN(n)) live.session.speakerNames[n] = String(v).trim().slice(0, 60); }
+    const names = {};
+    for (const [k, v] of Object.entries(body)) { const n = parseInt(k, 10); if (!Number.isNaN(n)) names[n] = String(v).trim().slice(0, 60); }
+    const anchors = await live.analyser.call('names', { names });
     const jid = lastJob.get(live.id);
-    if (jid) await jobs.setAnchors(jid, live.session.anchors());
+    if (jid) await jobs.setAnchors(jid, anchors);
     return json({ ok: true });
   }
   return error(404, 'Not found.');
@@ -168,17 +169,21 @@ async function start(body) {
   if (live && ['starting', 'live', 'stopping', 'finishing'].includes(live.status)) return error(409, 'A live session is already running.');
   const fmt = FORMATS.includes(body.format) ? body.format : 'm4a';
   const id = newId();
-  if (body.replay) { const [models, smile] = await warm().both; return startReplay(id, String(body.replay), fmt, models, smile, body); }
+  const numSpeakers = body.num_speakers ? parseInt(body.num_speakers, 10) : null;
+  if (body.replay) return startReplay(id, String(body.replay), fmt, numSpeakers);
   const devs = (body.devices || (body.device ? [{ id: body.device, name: body.device_name }] : []))
     .filter(d => d && d.id).slice(0, 8);
   if (!devs.length) return error(400, 'Choose a microphone.');
   // The computer's sound (page.js) gets a short name for its track.
   const names = devs.map(d => d.id === 'system:' ? 'Computer sound' : String(d.name || d.id));
   const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(`live-${id}`, { create: true });
-  const session = new Session({ tracks: devs.length > 1 ? devs.length : 0, names });
-  session.numSpeakers = body.num_speakers ? parseInt(body.num_speakers, 10) : null;
-  const inputs = new Inputs(dir, (mix, ins) => { session.feed(mix, ins); if (live?.status === 'starting') live.status = 'live'; });
-  live = { id, status: 'starting', error: null, label: names.join(' + '), kind: 'device', format: fmt, session, inputs, names,
+  // Not waited for: the worker may still be loading the models, and it takes
+  // its messages in order, so this reaches it before the first block anyway.
+  const a = warm(), tracks = devs.length > 1 ? devs.length : 0;
+  const begun = a.start(tracks, names, numSpeakers);
+  begun.catch(() => {});                       // reported through L.ready
+  const inputs = new Inputs(dir, (mix, ins) => { a.feed(mix, ins); if (live?.status === 'starting') live.status = 'live'; });
+  live = { id, status: 'starting', error: null, label: names.join(' + '), kind: 'device', format: fmt, analyser: a, inputs, names, tracks,
            warnings: [], started: Date.now(), dir, dirName: `live-${id}` };
   try {
     for (const [i, d] of devs.entries()) {
@@ -195,10 +200,7 @@ async function start(body) {
     }
     inputs.begin();
     const L = live;
-    const w = warm();
-    w.smile.then((smile) => session.useSmile(smile), () => {});
-    w.models.then((models) => session.useModels(models), () => {});
-    L.ready = w.both.then(() => {})
+    L.ready = Promise.all([begun, a.ready]).then(() => {})
       .catch((e) => { L.warnings.push(`The analysis couldn't start (${e.message || e}); the sound is still being recorded.`); });
   } catch (e) {
     await teardown();
@@ -210,7 +212,7 @@ async function start(body) {
 
 // Replay a saved recording at its own speed, as if live (with its tracks,
 // if it has a track per input after the mix).
-async function startReplay(id, jobId, fmt, models, smile, body) {
+async function startReplay(id, jobId, fmt, numSpeakers) {
   const meta = await store.jobs.get(jobId);
   if (!meta) return error(404, 'No such recording.');
   const blob = await store.files.get(jobId, 'input');
@@ -220,16 +222,17 @@ async function startReplay(id, jobId, fmt, models, smile, body) {
   const mix = await E.decode(blob, meta.input_file, 0);
   const ins = [];
   for (let i = 1; i <= tracks; i++) ins.push(await E.decode(blob, meta.input_file, i));
-  const session = new Session({ tracks, names, models, smile });
-  session.numSpeakers = body.num_speakers ? parseInt(body.num_speakers, 10) : null;
+  const a = warm();
+  await a.ready;                                // a replay is analysed as it plays, so the models come first
+  await a.start(tracks, names, numSpeakers);
   live = { id, status: 'live', error: null, label: `Replay of ${meta.name.replace(/\.[^.]*$/, '')}`, kind: 'file', format: fmt,
-           session, names, warnings: [], started: Date.now(), replay: { blob, name: meta.input_file, ext: (meta.input_file.match(/\.[^.]*$/) || ['.m4a'])[0] } };
+           analyser: a, names, tracks, warnings: [], started: Date.now(), replay: { blob, name: meta.input_file, ext: (meta.input_file.match(/\.[^.]*$/) || ['.m4a'])[0] } };
   const step = 800, t0 = performance.now();     // 50 ms at 16 kHz
   let at = 0;
   live.timer = setInterval(() => {
     const due = Math.floor((performance.now() - t0) / 1000 * 16000);
     while (at + step <= Math.min(due, mix.length)) {
-      session.feed(mix.subarray(at, at + step), tracks ? ins.map(t => t.subarray(at, at + step)) : null);
+      a.feed(mix.subarray(at, at + step), tracks ? ins.map(t => t.subarray(at, at + step)) : null);
       at += step;
     }
     if (at + step > mix.length) stop();
@@ -242,7 +245,7 @@ function stop() {
   live.status = 'stopping';
   if (live.timer) clearInterval(live.timer);
   if (live.inputs) { live.silent = live.inputs.silent(); live.inputs.stop(); for (const inp of live.inputs.list) inp.close?.(); }
-  live.session.end();
+  live.analyser.call('end').catch(() => {});
   live.status = 'finishing';
   finish(live).catch(e => { live.status = 'error'; live.error = e.message || String(e); console.error(e); });
 }
@@ -257,6 +260,7 @@ async function teardown() {
 async function discard() {
   live.discarded = true;
   await teardown();
+  live.analyser?.call('close').catch(() => {});
   const jid = lastJob.get(live.id);
   if (jid) { try { await jobs.remove(jid); } catch {} }
   live = null;
@@ -265,22 +269,23 @@ async function discard() {
 // The session has ended: wait for the analysis to catch up, make the
 // recording, and file it in the library.
 async function finish(L) {
-  const s = L.session;
-  await L.ready;                          // stopped before the models had loaded: analyse it all now
-  const settled = async () => { do await new Promise(r => setTimeout(r, 50)); while (s.busy); };
-  await settled();                        // the last windows and voice blocks (end() started them)
-  s.askRegroup = true; s.kick();
-  await settled();                        // and a final grouping on all of it
+  const a = L.analyser;
+  // The analysis catches up: if it stopped before the models had loaded,
+  // it's all analysed now; then the last windows and voice blocks, and a
+  // final grouping on all of it.
+  let settled = { anchors: {}, numSpeakers: null };
+  try { settled = await a.call('settle'); }
+  catch (e) { L.warnings.push(`The analysis didn't finish (${e.message}); the recording is kept.`); }
   if (L.discarded) return;
   L.status = 'stopped';
-  if (s.n < 16000 / 2) { await teardown(); return; }     // under half a second: nothing worth keeping
+  if (a.n < 16000 / 2) { await teardown(); return; }     // under half a second: nothing worth keeping
   const stamp = new Date(L.started);
   const pad = (v) => String(v).padStart(2, '0');
   const when = `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}.${pad(stamp.getMinutes())}`;
   let blob, ext;
   if (L.kind === 'file') {
     ext = L.replay.ext;
-    blob = await ff.cut(L.replay.blob, L.replay.name, s.n / 16000);
+    blob = await ff.cut(L.replay.blob, L.replay.name, a.n / 16000);
   } else {
     const tracks = [];
     for (const [i, inp] of L.inputs.list.entries()) {
@@ -292,15 +297,14 @@ async function finish(L) {
   const name = (L.kind === 'device' ? `Live ${when}` : L.label) + ext;
   // The saved file can start slightly later than the live stream (AAC's
   // lead-in): line the two up, then file the analysis with it.
-  let extra = { anchors: s.anchors(), num_speakers: s.numSpeakers };
+  let extra = { anchors: settled.anchors, num_speakers: settled.numSpeakers };
   try {
     const saved = await E.decode(blob, 'input' + ext, 0, 31);
-    const offset = E.offsetOf(saved, s.x.view());
-    const a = s.analysisToSave(offset);
-    if (a) extra = { ...extra, prep_from_live: true, prep_segments: [[offset, offset + s.n / 16000]], prep: a.prep,
-                     files: { voice_frames: a.frames } };
+    const { offset, analysis } = await a.call('save', { saved });
+    if (analysis) extra = { ...extra, prep_from_live: true, prep_segments: [[offset, offset + a.n / 16000]], prep: analysis.prep,
+                     files: { voice_frames: analysis.frames } };
   } catch (e) { console.warn('live analysis not kept:', e); }
-  if (s.tracks) extra.tracks = [...L.names];
+  if (L.tracks) extra.tracks = [...L.names];
   if (L.inputs) extra.live_inputs = L.inputs.summary();
   const job = await jobs.register(blob, name, null, extra);
   lastJob.set(L.id, job.id);

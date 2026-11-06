@@ -29,7 +29,14 @@ against it.
     - microphones come in through an AudioWorklet (`page.js`,
       `capture-worklet.js`), and programs' sound from the helper;
     - the inputs are kept in step, and recorded to the browser's private
-      file storage as they come.
+      file storage as they come. Sound that arrives late (a busy worker, a
+      browser that hands it on in bursts) is waited for, up to 5 s, and put
+      in its place by its timestamps; only a gap that stays empty becomes
+      silence;
+    - the analysis (`session.js`, with openSMILE and the speaker models) runs
+      in a worker of its own (`analysis-worker.js`, driven by `analyser.js`),
+      so a long step never holds up the sound being recorded. Checked by
+      `node --test web/app/backend/test/inputs.test.mjs`.
 - **`engine/`**: ports of the Python analysis (`analysis.js`, `timeline.js`,
   `speakers.js` + `linkage.js`, `sources.js`, `voice.js`, `measure.js`), tied
   together by `index.js`; `ffmpeg-ops.js` runs the desktop's FFmpeg commands.
