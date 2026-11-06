@@ -1,17 +1,23 @@
 // Live inputs in the backend worker: microphones (from the page's AudioWorklet)
 // and programs' sound (from the local helper, over a WebSocket), kept in step
 // the way the desktop app's FFmpeg does it (aresample=async: each input is
-// placed on the session clock by its timestamps; short gaps are filled with
+// placed on the session clock by its timestamps; gaps are filled with
 // silence, and an input running ahead is trimmed). Each input is saved as it
 // comes, at 48 kHz 16-bit, in the browser's private file storage (OPFS), so a
 // long session doesn't fill memory; at the end FFmpeg makes the recording
 // from those files, with the mix as the first track and each input after it.
 // For the analysis: the mix and each input, 16 kHz mono, in blocks.
+//
+// Sound that arrives late is still sound: a busy worker, or a browser that
+// hands the samples on in bursts, delays them without losing them, and their
+// timestamps still say where they go. So nothing is written until its place
+// on the clock has its sound, or until HOLD has gone by without it; only
+// then does a gap become silence.
 
 export const RATE = 48000, OUT_RATE = 16000, FACTOR = 3;
 const BLOCK = RATE / 20;              // 50 ms: how often analysis blocks are produced
-const SLACK = RATE / 50;              // 20 ms: drift allowed before padding or trimming
-const STALL = RATE / 2;               // an input this far behind the clock is padded with silence
+const SLACK = RATE / 50;              // 20 ms: drift allowed before leaving a gap or trimming
+const HOLD = RATE * 5;                // how long sound that hasn't arrived is waited for
 
 // 48 kHz -> 16 kHz: windowed-sinc low-pass (Kaiser, beta 8.6, 0.95 of the new
 // Nyquist), then every third sample. Streaming; one per stream.
@@ -56,12 +62,20 @@ const mono = (data, ch) => {
 };
 
 // One input: its samples on the session clock, written to its own file.
-class Input {
+export class Input {
   constructor(id, name, channels, file) {
-    Object.assign(this, { id, name, channels, file, written: 0, pending: [], pendingFrames: 0, error: null, ended: false });
-    // For the session's diagnostics: what arrives and where it lands.
-    this.stats = { chunks: 0, peak: 0, padded: 0, trimmed: 0, lastAt: 0, lastHave: 0, sound: 0, zeros: 0, lastArrive: 0, lastSound: 0 };
+    // written: frames on the clock already in the file. have: where the sound
+    // that has arrived ends. segs: that sound, not yet written, as runs
+    // {at, data} in order, none before `written`; the space between runs is
+    // sound that hasn't arrived (yet).
+    Object.assign(this, { id, name, channels, file, written: 0, have: 0, segs: [], error: null, ended: false });
+    // For the session's diagnostics: what arrives and where it lands. padded:
+    // written as silence because nothing arrived for it; trimmed: arrived for
+    // a place that already had sound; late: arrived after HOLD, too late to keep.
+    this.stats = { chunks: 0, peak: 0, padded: 0, trimmed: 0, late: 0, lastAt: 0, lastHave: 0, sound: 0, zeros: 0, lastArrive: 0, lastSound: 0 };
   }
+  // Frames that have arrived but aren't written yet (to the end of the newest).
+  get pendingFrames() { return Math.max(0, this.have - this.written); }
   // Frames of `data` (interleaved float32 at 48 kHz) whose first sample is at
   // `at` frames on the session clock.
   place(data, at) {
@@ -69,30 +83,46 @@ class Input {
     // A real microphone always has some hiss: exact zeros mean it's muted, or
     // something else has it (lastSound); nothing arriving at all means the
     // browser isn't passing it on (lastArrive). Both on the session clock.
-    this.stats.chunks++; this.stats.lastAt = Math.round(at); this.stats.lastHave = Math.round(this.written + this.pendingFrames);
+    this.stats.chunks++; this.stats.lastAt = Math.round(at); this.stats.lastHave = Math.round(this.have);
     let peak = 0;
     for (let i = 0; i < data.length; i++) { const v = Math.abs(data[i]); if (v > peak) peak = v; }
     if (peak > this.stats.peak) this.stats.peak = peak;
     this.stats.lastArrive = Math.round(at + frames);
     if (peak > 0) { this.stats.sound += frames; this.stats.lastSound = Math.round(at + frames); } else this.stats.zeros += frames;
-    const ahead = this.written + this.pendingFrames - at;   // > 0: we already have audio past `at`
-    if (-ahead > SLACK) { this.stats.padded += Math.round(-ahead); this.add(new Float32Array(Math.round(-ahead) * ch)); }  // a gap: silence
-    if (ahead > SLACK) { const cut = Math.min(frames, Math.round(ahead)); this.stats.trimmed += cut; data = data.subarray(cut * ch); }
-    if (data.length) this.add(data);
-  }
-  add(data) { this.pending.push(data); this.pendingFrames += data.length / this.channels; }
-  // Up to `frames` frames, as float32 interleaved; padded with silence if short.
-  take(frames) {
-    const ch = this.channels, out = new Float32Array(frames * ch);
-    let o = 0;
-    while (o < frames && this.pending.length) {
-      const head = this.pending[0], n = Math.min(frames - o, head.length / ch);
-      out.set(head.subarray(0, n * ch), o * ch);
-      o += n;
-      if (n * ch === head.length) this.pending.shift(); else this.pending[0] = head.subarray(n * ch);
+    // Within SLACK of where the sound so far ends: straight on (the clocks
+    // drift a little). Further on: a gap, left for take() to fill. Earlier:
+    // that place already has sound (or was written while this waited).
+    const base = Math.max(this.have, this.written);
+    let start = Math.round(at);
+    if (Math.abs(start - base) <= SLACK) start = base;
+    if (start < base) {
+      const cut = Math.min(frames, base - start);
+      if (this.written > this.have) this.stats.late += cut; else this.stats.trimmed += cut;
+      data = data.subarray(cut * ch); start = base;
     }
-    this.pendingFrames -= o;
-    this.written += frames;
+    if (!data.length) return;
+    this.segs.push({ at: start, data });
+    this.have = start + data.length / ch;
+  }
+  // Whether the next `frames` can be written: their sound has all arrived, or
+  // HOLD has gone by (`clock`, the session clock now; no wait once this input
+  // has ended). Never past the clock.
+  ready(frames, clock) {
+    return this.have >= this.written + frames || clock - (this.written + frames) >= (this.ended ? 0 : HOLD);
+  }
+  // The next `frames` frames on the clock, as float32 interleaved; silence
+  // where nothing arrived.
+  take(frames) {
+    const ch = this.channels, out = new Float32Array(frames * ch), end = this.written + frames;
+    let real = 0;
+    while (this.segs.length && this.segs[0].at < end) {
+      const s = this.segs[0], n = s.data.length / ch, k = Math.min(n, end - s.at);
+      out.set(s.data.subarray(0, k * ch), (s.at - this.written) * ch);
+      real += k;
+      if (k === n) this.segs.shift(); else { s.data = s.data.subarray(k * ch); s.at += k; }
+    }
+    this.stats.padded += frames - real;
+    this.written = end;
     return out;
   }
 }
@@ -150,20 +180,13 @@ export class Inputs {
     });
   }
 
-  // Every 25 ms: hand on whatever all inputs have, in 50 ms blocks; an input
-  // stalled well behind the clock is padded so the others don't wait for it.
+  // Every 25 ms: hand on whatever all inputs have, in 50 ms blocks. An input
+  // whose sound hasn't come is waited for, up to HOLD; then its gap is
+  // written as silence, so the others don't wait for it for ever.
   pump() {
     if (this.start == null || !this.list.length) return;
     const clock = (this.now() - this.start) / 1000 * RATE;
-    for (const inp of this.list) {
-      const have = inp.written + inp.pendingFrames;
-      if (clock - have > STALL) {
-        const gap = Math.round(clock - have - SLACK);
-        inp.add(new Float32Array(gap * inp.channels));
-        inp.stats.padded += gap;
-      }
-    }
-    while (this.list.every(i => i.pendingFrames >= BLOCK)) this.block(BLOCK);
+    while (this.list.every(i => i.ready(BLOCK, clock))) this.block(BLOCK);
   }
 
   block(frames) {
@@ -200,7 +223,8 @@ export class Inputs {
     const sec = (f) => (f / RATE).toFixed(1);
     return this.list.map((inp, i) => {
       const s = inp.stats, kind = String(inp.id).split(':')[0] || 'input';
-      return `input ${i + 1} (${kind}): ${sec(s.sound)} s sound, ${sec(s.zeros)} s pure silence, ${sec(s.padded)} s nothing arrived`;
+      return `input ${i + 1} (${kind}): ${sec(s.sound)} s sound, ${sec(s.zeros)} s pure silence, ${sec(s.padded)} s nothing arrived` +
+        (s.late ? `, ${sec(s.late)} s arrived too late` : '');
     }).join('; ');
   }
 

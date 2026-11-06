@@ -32,7 +32,7 @@ let version = 'local';
 try { version = execSync('git rev-parse --short HEAD', { cwd: repo }).toString().trim(); } catch {}
 version += '-' + Date.now().toString(36);
 writeFileSync(join(out, 'sw.js'), readFileSync(join(web, 'app', 'sw.js'), 'utf8').replace("'__VERSION__'", JSON.stringify(version)));
-cp(join(web, 'app', 'backend'), join(out, 'backend'));
+cp(join(web, 'app', 'backend'), join(out, 'backend'), notTests);
 
 // The engine (ports of the Python analysis) and the WebAssembly builds.
 cp(join(web, 'engine'), join(out, 'engine'), notTests);
