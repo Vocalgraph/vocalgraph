@@ -175,15 +175,13 @@ async function embeddings(x, starts, binary, models, say) {
  * The slow, count-independent part: segmentation, speaker counting and
  * voiceprints, for 16 kHz mono audio. null when there is no speech.
  */
-export async function prepare(x16k, models, progress) {
+// voiceprints: false skips the voiceprint model (all NaN, as for a silent
+// local speaker), for one speaker, where grouping doesn't use them; the
+// result is marked `partial`.
+export async function prepare(x16k, models, progress, { voiceprints = true } = {}) {
   const say = progress || (() => {});
   if (x16k.length < RATE / 2) return null;
-  // the samples the laptop pipeline sees (its decode goes through 16-bit)
-  const x = new Float32Array(x16k.length);
-  for (let i = 0; i < x.length; i++) {
-    const v = rint(f32(x16k[i] * 32768.0));
-    x[i] = Math.min(32767, Math.max(-32768, v)) / 32768.0;
-  }
+  const x = as16bit(x16k);
   const starts = chunkStarts(x.length);
   const chunks = starts.length;
   const binary = await segment(x, starts, models, say);
@@ -194,9 +192,31 @@ export async function prepare(x16k, models, progress) {
   let top = 0;
   for (let i = 0; i < avg.length; i++) { count[i] = rint(avg[i]); if (count[i] > top) top = count[i]; }
   if (top === 0) return null;
+  if (!voiceprints) return { binary, count, embeddings: new Float32Array(chunks * LOCAL * DIM).fill(NaN), chunks, level: levels(x), partial: true };
   const emb = await embeddings(x, starts, binary, models, say);
   say(1.0);
   return { binary, count, embeddings: emb, chunks, level: levels(x) };
+}
+
+// the samples the laptop pipeline sees (its decode goes through 16-bit)
+function as16bit(x16k) {
+  const x = new Float32Array(x16k.length);
+  for (let i = 0; i < x.length; i++) {
+    const v = rint(f32(x16k[i] * 32768.0));
+    x[i] = Math.min(32767, Math.max(-32768, v)) / 32768.0;
+  }
+  return x;
+}
+
+/**
+ * The voiceprints prepare() would give, for audio already segmented: `binary`
+ * is prepare()'s for these same samples (for consecutive windows, theirs one
+ * after another, with the samples from the first window's start to the last
+ * one's end). The windows are batched together.
+ */
+export async function voiceprints(x16k, binary, models) {
+  const x = as16bit(x16k);
+  return embeddings(x, chunkStarts(x.length), binary, models, () => {});
 }
 
 /** Loudness in dB (RMS), LEVELS_PER_S values a second (speakers.levels). */

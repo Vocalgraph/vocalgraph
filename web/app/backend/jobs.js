@@ -99,8 +99,13 @@ async function analyze(job) {
   job.threshold = a.chosen; job.duration = a.duration;
 }
 
+// A prep without voiceprints (a live session set to one speaker) serves
+// one speaker only: any other count works them out from the recording.
+const usable = (p, job) => !(p?.partial && job.num_speakers !== 1);
+
 async function prepare(job) {
-  if (job.prep_from_live && await prep(job)) { delete job.prep_from_live; return; }
+  const live = job.prep_from_live && await prep(job);
+  if (live && usable(live, job)) { delete job.prep_from_live; return; }
   delete job.prep_from_live;
   const a = await analysis(job), segs = trial(a, a.chosen).segments;
   const progress = say(job, 'Working out who is speaking');
@@ -256,7 +261,7 @@ export async function resumeInterrupted() {
     const job = await load(meta.id);
     const steps = [];
     if (!(await store.files.get(job.id, 'analysis.json'))) steps.push(analyze);
-    if (!(await store.files.get(job.id, 'speakers')) || !job.prep_segments) steps.push(prepare);
+    if (!(await store.files.get(job.id, 'speakers')) || !usable(await prep(job), job) || !job.prep_segments) steps.push(prepare);
     steps.push(assign, render);
     start(job, ...steps);
   }
@@ -353,7 +358,11 @@ export async function settings(id, req) {
   if ('num_speakers' in body) {
     let n = body.num_speakers; n = n === null || n === '' || n === 0 ? null : parseInt(n, 10);
     if (n !== null && !(n >= 1 && n <= 20)) return error(400, 'Number of speakers must be between 1 and 20.');
-    if (n !== (job.num_speakers ?? null)) { job.num_speakers = n; steps.push(assign); }
+    if (n !== (job.num_speakers ?? null)) {
+      job.num_speakers = n;
+      if (!usable(await prep(job), job)) steps.push(prepare);
+      steps.push(assign);
+    }
   }
   if ('threshold' in body) {
     const t = parseInt(body.threshold, 10), a = await analysis(job);

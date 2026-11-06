@@ -45,6 +45,8 @@ class Part {
   }
 }
 
+const STATE_WAIT = 300;          // ms the state waits for the speakers before using their last answer
+
 export class Analyser {
   constructor() {
     this.voice = new Part('voice'); this.speakers = new Part('speakers'); this.n = 0;
@@ -57,17 +59,23 @@ export class Analyser {
   both(op, args) { return Promise.all([this.voice.call(op, args), this.speakers.call(op, args)]); }
 
   // A new session (replacing the last one). n counts the 16 kHz samples fed.
-  start(tracks, names, numSpeakers) { this.n = 0; return this.both('start', { tracks, names, numSpeakers }); }
+  start(tracks, names, numSpeakers) { this.n = 0; this.last = null; return this.both('start', { tracks, names, numSpeakers }); }
   // 16 kHz blocks: the mix, and each input when several (copied for each
   // worker, so a view into a larger buffer, a replay's, doesn't send it all).
   feed(mix, inputs) { this.n += mix.length; this.voice.feed(mix, inputs); this.speakers.feed(mix, inputs); }
   end() { return this.both('end'); }
   close() { return this.both('close'); }
 
-  // The speakers' state, with the voice's own lag and readiness. Each part
-  // answers when it's free, the voice quickly.
+  // The speakers' state, with the voice's own lag and readiness. The voice
+  // answers quickly; the speakers when they're free, so if they're busy (a
+  // batch of voiceprints) their last answer is used, moved on to now.
   async state(extra) {
-    const [v, s] = await Promise.all([this.voice.call('state', { extra }), this.speakers.call('state', { extra })]);
+    const asked = this.speakers.call('state', { extra }).then((s) => (this.last = s));
+    const late = new Promise((r) => setTimeout(r, STATE_WAIT, null));
+    const [v, fresh] = await Promise.all([this.voice.call('state', { extra }), this.last ? Promise.race([asked, late]) : asked]);
+    const duration = this.n / 16000;
+    const s = fresh || { ...this.last, ...extra, error: extra.error || this.last.error || null, duration,
+      speakers_behind: extra.status === 'live' ? this.last.speakers_behind + Math.max(0, duration - this.last.duration) : 0 };
     return { ...s, voice_behind: v.voice_behind, level: v.level ?? s.level, preparing: v.preparing,
              error: s.error || v.error || null };
   }

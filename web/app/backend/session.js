@@ -9,7 +9,10 @@
 //             voice only becomes a speaker once confirmed (CONFIRM_TALK, twice
 //             running); anyone on an input of their own read off its track;
 //             voices much quieter than the speakers (a TV, a call in another
-//             room) set apart as background, as the library does;
+//             room) set apart as background, as the library does; with
+//             one speaker set, no voiceprints (grouping doesn't use them):
+//             all speech is that speaker's, and if the count changes, the
+//             windows without voiceprints get them, after any new ones;
 //   voice     openSMILE on each new 0.1 s with 0.5 s before and 0.1 s after;
 //             with several inputs, on each input on its own.
 // In the browser the voice and the speakers each run in a worker of their
@@ -21,6 +24,7 @@ const S = E.speakers, src = E.sources, V = E.voice;
 const RATE = S.RATE;
 const VOICE_BLOCK = 0.1, VOICE_BEFORE = 0.5, VOICE_AFTER = 0.1;
 const REGROUP_EVERY = 4.0;
+const REPRINT = 2;                     // windows given voiceprints at once, after a change from one speaker
 const CONFIRM_TALK = 2.0, CONFIRM_SHARE = 0.05;
 const DROP_TALK = 3.0, DROP_SHARE = 0.03, DROP_AFTER = 2;
 const LEVEL = Math.trunc(src.HOP * RATE);
@@ -89,7 +93,11 @@ export class Session {
     this.vsrc = new Grow(Int8Array, 6000); this.vprim = new Grow(Uint8Array, 6000);
     this.voiceUntil = 0; this.ended = false;
     this.window = 0; this.voiceAt = 0; this.lastRegroup = 0; this.busy = false;
+    this.unprinted = new Set();                                    // windows analysed without voiceprints
+    this.solo = null;                                              // with one speaker: their id
   }
+
+  get one() { return this.numSpeakers === 1; }
 
   get n() { return this.x.n; }
 
@@ -125,6 +133,13 @@ export class Session {
     if (this.doVoice && !this.smile) return;
     // speakers: every complete 10 s window
     while (this.doSpeakers && this.models && this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
+    // the count changed from one: voiceprints for the windows without them,
+    // one at a time, so new windows keep coming first
+    if (this.doSpeakers && this.models && !this.one && this.unprinted.size) {
+      await this.reprint();
+      if (!this.unprinted.size) this.askRegroup = true;
+      this.again = true;
+    }
     // voice: every complete 0.1 s block (the last part once the input ends)
     const block = Math.round(VOICE_BLOCK * RATE), after = Math.round(VOICE_AFTER * RATE);
     while (this.doVoice && (this.n >= this.voiceAt + block + after || (this.ended && this.n - this.voiceAt >= Math.round(0.03 * RATE)))) {
@@ -142,10 +157,34 @@ export class Session {
 
   async speakerWindow(c) {
     const crop = this.x.view(c * S.STEP, c * S.STEP + S.WINDOW).slice();
-    const p = await S.prepare(crop, this.models, null);
+    const p = await S.prepare(crop, this.models, null, { voiceprints: !this.one });
+    if (p?.partial) this.unprinted.add(c);
     const binary = p ? p.binary : new Uint8Array(S.NUM_FRAMES * S.LOCAL);
     const emb = p ? p.embeddings : nan256();
     this.placeWindow(c, binary, emb);
+  }
+
+  // Voiceprints for the oldest windows without them: up to REPRINT
+  // consecutive windows at once (a batch), from the speech already found.
+  async reprint() {
+    const c0 = Math.min(...this.unprinted);
+    let c1 = c0;
+    while (c1 + 1 < c0 + REPRINT && this.unprinted.has(c1 + 1)) c1++;
+    const x = this.x.view(c0 * S.STEP, c1 * S.STEP + S.WINDOW).slice();
+    const per = S.NUM_FRAMES * S.LOCAL, binary = new Uint8Array((c1 - c0 + 1) * per);
+    for (let c = c0; c <= c1; c++) binary.set(this.binary[c], (c - c0) * per);
+    const emb = await S.voiceprints(x, binary, this.models), size = S.LOCAL * S.DIM;
+    for (let c = c0; c <= c1; c++) { this.emb[c] = emb.slice((c - c0) * size, (c - c0 + 1) * size); this.unprinted.delete(c); }
+  }
+
+  // With one speaker: their id (the one who talks most so far, or a new one).
+  soloId() {
+    const talk = new Map();
+    for (const [a, b, k] of this.grouped) if (k !== BG) talk.set(k, (talk.get(k) || 0) + b - a);
+    const most = [...talk].sort((p, q) => q[1] - p[1])[0];
+    if (most) this.solo = most[0];
+    if (this.solo === null) this.solo = this.nextPid++;
+    return this.solo;
   }
 
   // Store one window and label its newest second by nearest speaker.
@@ -158,8 +197,11 @@ export class Session {
       const e = emb.subarray(k * S.DIM, (k + 1) * S.DIM);
       let any = false;
       for (let f = 0; f < S.NUM_FRAMES; f++) if (binary[f * S.LOCAL + k]) { any = true; break; }
-      if (!any || e.some(Number.isNaN)) continue;
-      const pid = this.nearest(e);
+      if (!any) continue;
+      let pid;
+      if (this.one) pid = this.soloId();
+      else if (e.some(Number.isNaN)) continue;
+      else pid = this.nearest(e);
       let run = -1;
       for (let f = 0; f <= S.NUM_FRAMES; f++) {
         const on = f < S.NUM_FRAMES && binary[f * S.LOCAL + k] && stamp(f) >= lo && stamp(f) < hi;
@@ -454,6 +496,7 @@ export class Session {
   }
   prepToSave() {
     if (!this.binary.length) return null;
+    const partial = this.unprinted.size > 0;      // one speaker: some windows have no voiceprints
     const chunks = this.binary.length;
     const binary = new Uint8Array(chunks * S.NUM_FRAMES * S.LOCAL), embeddings = new Float32Array(chunks * S.LOCAL * S.DIM);
     this.binary.forEach((b, c) => binary.set(b, c * b.length));
@@ -462,7 +505,7 @@ export class Session {
     for (let i = 0; i < sums.length; i++) sums[i] = binary[i * 3] + binary[i * 3 + 1] + binary[i * 3 + 2];
     const count = Int16Array.from(S.aggregate(sums, chunks, 1, false), v => S.rint(v));
     // level: the mix's loudness, so the library can tell background voices apart
-    return { binary, count, embeddings, chunks, level: S.levels(this.x.view()) };
+    return { binary, count, embeddings, chunks, level: S.levels(this.x.view()), ...(partial ? { partial } : {}) };
   }
   framesToSave(offset) {
     const vf = this.voiceFrames();
