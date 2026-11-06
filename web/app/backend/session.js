@@ -12,6 +12,9 @@
 //             room) set apart as background, as the library does;
 //   voice     openSMILE on each new 0.1 s with 0.5 s before and 0.1 s after;
 //             with several inputs, on each input on its own.
+// In the browser the voice and the speakers each run in a worker of their
+// own (a session with only that role), so the voice chart keeps up while the
+// speaker models work; analyser.js puts their answers together.
 import * as E from '../engine/index.js';
 
 const S = E.speakers, src = E.sources, V = E.voice;
@@ -67,8 +70,9 @@ function bestPairs(score) {
 }
 
 export class Session {
-  constructor({ tracks = 0, names = [], models, smile }) {
-    Object.assign(this, { tracks, names, models, smile });
+  // voice / speakers: which parts this session does (both, unless told).
+  constructor({ tracks = 0, names = [], models, smile, voice = true, speakers = true }) {
+    Object.assign(this, { tracks, names, models, smile, doVoice: voice, doSpeakers: speakers });
     this.numSpeakers = null; this.speakerNames = {};
     this.x = new Grow(Float32Array);                               // the mix, 16 kHz, rounded to 16-bit
     this.tx = Array.from({ length: tracks }, () => new Grow(Int16Array));
@@ -118,12 +122,12 @@ export class Session {
   }
 
   async step() {
-    if (!this.smile) return;
+    if (this.doVoice && !this.smile) return;
     // speakers: every complete 10 s window
-    while (this.models && this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
+    while (this.doSpeakers && this.models && this.n >= this.window * S.STEP + S.WINDOW) await this.speakerWindow(this.window++);
     // voice: every complete 0.1 s block (the last part once the input ends)
     const block = Math.round(VOICE_BLOCK * RATE), after = Math.round(VOICE_AFTER * RATE);
-    while (this.n >= this.voiceAt + block + after || (this.ended && this.n - this.voiceAt >= Math.round(0.03 * RATE))) {
+    while (this.doVoice && (this.n >= this.voiceAt + block + after || (this.ended && this.n - this.voiceAt >= Math.round(0.03 * RATE)))) {
       await this.voiceBlock(this.voiceAt, block);
       this.voiceAt += block;
     }
@@ -420,10 +424,19 @@ export class Session {
   }
 
   voiceFor(spk, points, gate) {
-    const duration = Math.max(this.n / RATE, 1e-3), { turns } = this.display();
+    return this.voiceOver(spk, points, gate, this.speakerSpans(spk));
+  }
+  // What voiceOver() needs from the speakers: {spans, home} for `spk`.
+  speakerSpans(spk) {
+    const { turns } = this.display();
     const spans = spk === 'all' ? E.join(turns.map(([a, b]) => [a, b, 0]), 0).map(([a, b]) => [a, b])
                                 : turns.filter(t => t[2] === spk).map(([a, b]) => [a, b]);
-    const { t, raw } = E.framesOf(this.voiceFrames(), spk === 'all' ? null : this.homes.get(spk) ?? null);
+    return { spans, home: spk === 'all' ? null : this.homes.get(spk) ?? null };
+  }
+  // The voice measures over `spans` (from speakerSpans), from input `home`'s frames.
+  voiceOver(spk, points, gate, { spans, home }) {
+    const duration = Math.max(this.n / RATE, 1e-3);
+    const { t, raw } = E.framesOf(this.voiceFrames(), home);
     return E.measure(t, raw, spans, gate, (v) => v, duration, points);
   }
 
@@ -436,6 +449,10 @@ export class Session {
   // The voiceprints in prepare()'s layout, and the voice frames moved onto
   // the saved file's timeline by `offset` (the encoder's lead-in).
   analysisToSave(offset) {
+    const prep = this.prepToSave();
+    return prep && { prep, frames: this.framesToSave(offset) };
+  }
+  prepToSave() {
     if (!this.binary.length) return null;
     const chunks = this.binary.length;
     const binary = new Uint8Array(chunks * S.NUM_FRAMES * S.LOCAL), embeddings = new Float32Array(chunks * S.LOCAL * S.DIM);
@@ -444,10 +461,13 @@ export class Session {
     const sums = new Float32Array(chunks * S.NUM_FRAMES);
     for (let i = 0; i < sums.length; i++) sums[i] = binary[i * 3] + binary[i * 3 + 1] + binary[i * 3 + 2];
     const count = Int16Array.from(S.aggregate(sums, chunks, 1, false), v => S.rint(v));
+    // level: the mix's loudness, so the library can tell background voices apart
+    return { binary, count, embeddings, chunks, level: S.levels(this.x.view()) };
+  }
+  framesToSave(offset) {
     const vf = this.voiceFrames();
     vf.t = vf.t.map(v => v + offset);
-    // level: the mix's loudness, so the library can tell background voices apart
-    return { prep: { binary, count, embeddings, chunks, level: S.levels(this.x.view()) }, frames: vf };
+    return vf;
   }
 }
 
