@@ -1,7 +1,7 @@
 // Live in the browser: the /api/live/... routes of vocalgraph/server.py, with
 // microphones opened by the page (page.js), programs' sound from the local
 // helper, the inputs kept in step (inputs.js), the analysis (session.js, in a
-// worker of its own: analyser.js), and the recording filed in the library
+// workers of its own: analyser.js), and the recording filed in the library
 // when it stops, with its voiceprints and voice frames so the library doesn't
 // analyse it again.
 import { json, error } from './http.js';
@@ -28,14 +28,14 @@ const FORMATS = ['m4a', 'flac'];
 let live = null;            // { id, status, error, label, kind, format, analyser, inputs, names, warnings, job, started, dir }
 let lastJob = new Map();    // live id -> library job id
 
-// The analysis worker, with the speaker models and openSMILE, made once per
-// page: they take a few seconds to load the first time, so the Live page
+// The analysis workers, one with openSMILE and one with the speaker models,
+// made once per page: they take a few seconds to load the first time, so the Live page
 // starts this as soon as it lists the inputs, and recording doesn't wait for
 // it. One that failed is replaced the next time, unless a session still uses it.
 let analyser = null;
 const warm = () => {
   if (!analyser || (analyser.failed && live?.analyser !== analyser)) {
-    analyser?.worker.terminate();
+    analyser?.terminate();
     analyser = new Analyser();
   }
   return analyser;
@@ -103,11 +103,11 @@ export async function get(what, req) {
   }
   if (!live) return what === 'state' ? json({ status: 'idle' }) : error(404, 'No live session.');
   if (what === 'state') return json(await state());
-  if (what === 'frames') return json(await live.analyser.call('frames', { from: parseInt(req.query.get('from') || '0', 10) }));
+  if (what === 'frames') return json(await live.analyser.frames(parseInt(req.query.get('from') || '0', 10)));
   if (what === 'voice') {
     let spk = req.query.get('spk') || 'all'; if (spk !== 'all') spk = parseInt(spk, 10);
     const points = Math.max(100, Math.min(20000, parseInt(req.query.get('points') || String(E.MAX_POINTS), 10) || E.MAX_POINTS));
-    return json(await live.analyser.call('voice', { spk, points, gate: req.query.get('gate') === '1' }));
+    return json(await live.analyser.voiceOf(spk, points, req.query.get('gate') === '1'));
   }
   return error(404, 'Not found.');
 }
@@ -116,7 +116,7 @@ async function state() {
   const extra = { id: live.id, status: live.status, error: live.error || null, label: live.label, kind: live.kind,
     format: live.format, warnings: live.warnings };
   let out;
-  try { out = await live.analyser.call('state', { extra }); }
+  try { out = await live.analyser.state(extra); }
   catch (e) { out = { ...extra, error: extra.error || e.message, duration: live.analyser.n / 16000 }; }
   if (live.inputs) out.input_stats = live.inputs.list.map(i => ({ name: i.name, channels: i.channels, ...(i.stats || {}) }));
   // Microphones giving no sound: while recording, and as they were at the end.
@@ -147,7 +147,7 @@ export async function post(what, req) {
     if ('num_speakers' in body) {
       let n = body.num_speakers; n = n === null || n === '' || n === 0 ? null : parseInt(n, 10);
       if (n !== null && !(n >= 1 && n <= 20)) return error(400, 'Number of speakers must be between 1 and 20.');
-      await live.analyser.call('speakers', { n });
+      await live.analyser.setSpeakers(n);
     }
     return json({ ok: true });
   }
@@ -155,7 +155,7 @@ export async function post(what, req) {
     if (!live) return error(404, 'No live session.');
     const names = {};
     for (const [k, v] of Object.entries(body)) { const n = parseInt(k, 10); if (!Number.isNaN(n)) names[n] = String(v).trim().slice(0, 60); }
-    const anchors = await live.analyser.call('names', { names });
+    const anchors = await live.analyser.names(names);
     const jid = lastJob.get(live.id);
     if (jid) await jobs.setAnchors(jid, anchors);
     return json({ ok: true });
@@ -245,7 +245,7 @@ function stop() {
   live.status = 'stopping';
   if (live.timer) clearInterval(live.timer);
   if (live.inputs) { live.silent = live.inputs.silent(); live.inputs.stop(); for (const inp of live.inputs.list) inp.close?.(); }
-  live.analyser.call('end').catch(() => {});
+  live.analyser.end().catch(() => {});
   live.status = 'finishing';
   finish(live).catch(e => { live.status = 'error'; live.error = e.message || String(e); console.error(e); });
 }
@@ -260,7 +260,7 @@ async function teardown() {
 async function discard() {
   live.discarded = true;
   await teardown();
-  live.analyser?.call('close').catch(() => {});
+  live.analyser?.close().catch(() => {});
   const jid = lastJob.get(live.id);
   if (jid) { try { await jobs.remove(jid); } catch {} }
   live = null;
@@ -274,7 +274,7 @@ async function finish(L) {
   // it's all analysed now; then the last windows and voice blocks, and a
   // final grouping on all of it.
   let settled = { anchors: {}, numSpeakers: null };
-  try { settled = await a.call('settle'); }
+  try { settled = await a.settle(); }
   catch (e) { L.warnings.push(`The analysis didn't finish (${e.message}); the recording is kept.`); }
   if (L.discarded) return;
   L.status = 'stopped';
@@ -300,7 +300,7 @@ async function finish(L) {
   let extra = { anchors: settled.anchors, num_speakers: settled.numSpeakers };
   try {
     const saved = await E.decode(blob, 'input' + ext, 0, 31);
-    const { offset, analysis } = await a.call('save', { saved });
+    const { offset, analysis } = await a.save(saved);
     if (analysis) extra = { ...extra, prep_from_live: true, prep_segments: [[offset, offset + a.n / 16000]], prep: analysis.prep,
                      files: { voice_frames: analysis.frames } };
   } catch (e) { console.warn('live analysis not kept:', e); }
